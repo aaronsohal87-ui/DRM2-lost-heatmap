@@ -79,7 +79,23 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         ax.set_title(f"Lost Parcels in Cluster {selected_cluster} by {view_detail}")
         plt.xticks(rotation=0, ha="center") # keeps labels horizontal 
         plt.tight_layout() # stops labels getting cut off at edges
-        st.pyplot(fig) # displays matplotlib chart in Streamlit
+        st.pyplot(fig) # displays matplotlib chart in Streamlit 
+
+        #DSP Breakdown ---------------------------------------------- 
+
+        st.subheader("Lost Parcels by DSP")  
+
+        selected_cluster = st.selectbox("Select Cluster:" , sorted(df["DSP Name"].dropna().unique())) 
+        fig, ax = plt.subplots(figsize=(12,5)) 
+        ax2.bar(chart_data.index, chart_data.values)
+        ax2.set_xlabel("DSP")
+        ax2.set_ylabel("Number of Lost Parcels")
+        ax2.set_title(f"Lost Parcels by DSP in Cluster {selected_Cluster}")
+        plt.xticks(rotation=0, ha = "right" 
+        st.pyplot(fig)
+
+
+
         
 
 
