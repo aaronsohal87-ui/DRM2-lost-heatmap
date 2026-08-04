@@ -15,7 +15,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
     found_sensitive = [col for col in sensitive_columns if col in df.columns] # go through sensitive column titles and check which ones actually exist in uploaded file
 
     if found_sensitive:
-        st.warning(f"Sensitive information uploaded: {', '.join(found_sensitive)}") # shows yellow warning box with variables possible in text
+        st.warning(f"Sensitive Information Column Titles Uploaded: {', '.join(found_sensitive)}") # shows yellow warning box with variables possible in text
         st.info("These columns have been automatically removed") # shows box telling user columns been removed
         df = df.drop(columns=found_sensitive) # removes sensitive information  
     
@@ -52,5 +52,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         df["Size Category"] = df["Longest Side"].apply(get_size) #records longest side of package and saves it in size category with get_size function applied to it
         st.write(" Lost Parcel Size Breakdown")
         st.write(df["Size Category"].value_counts()) # counts how many packages are in size category and displays it on screen
+
+
 
 
