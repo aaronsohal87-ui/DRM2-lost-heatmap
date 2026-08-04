@@ -70,22 +70,24 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
 
         # Tabs ----------------------------------------------------------
 
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Location", "DSP & Cycle", "Time", "Export"]) # creates clickable tabs
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Overview", "Location", "Rankings", "DSP & Cycle", "Time", "Export"]) # creates clickable tabs
 
         # TAB 1: OVERVIEW -----------------------------------------------
         with tab1:
-            st.subheader("Lost Parcel Size Breakdown")
+            st.caption("Size breakdown of lost parcels and summary by cluster.") # tells user what this tab does
 
             overview_display = st.radio("Display as:", ["Table", "Chart"], horizontal=True, key="overview_display") # toggle between chart and table
 
             if overview_display == "Table":
-                st.write(df["Size Category"].value_counts()) # counts how many packages are in size category and displays it on screen
+                st.subheader("Lost Parcel Size Breakdown")
+                st.write(df["Size Category"].value_counts()) # counts how many packages are in size category
 
                 st.subheader("Lost Parcels by Cluster and Size")
                 summary_tbl = df.groupby(["Cluster", "Size Category"]).size().unstack(fill_value=0) # counts parcels by cluster AND size, makes a table
                 summary_tbl["Total"] = summary_tbl.sum(axis=1) # adds a Total column at the end
                 st.dataframe(summary_tbl) # displays the table in the app
             else:
+                st.subheader("Lost Parcels by Size")
                 size_counts = df["Size Category"].value_counts() # counts per size
                 fig_ov, ax_ov = plt.subplots(figsize=(8, 4)) # creates chart canvas
                 ax_ov.bar(size_counts.index, size_counts.values, color=["green", "orange", "red", "darkred"]) # draws bars coloured by severity
@@ -98,15 +100,15 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
 
         # TAB 2: LOCATION -----------------------------------------------
         with tab2:
-            st.subheader("Lost Parcels by Location")
+            st.caption("Drill into a cluster to see which aisles or zones have the most losts. Filter by package size to spot problem areas.") # tells user what this tab does
 
-            selected_cluster = st.selectbox("Select Cluster:", sorted(df["Cluster"].dropna().unique()), key="cluster_select") # dropdown of every unique cluster, key gives it a unique ID so Streamlit doesn't mix it up with other dropdowns
+            selected_cluster = st.selectbox("Select Cluster:", sorted(df["Cluster"].dropna().unique()), key="cluster_select") # dropdown of every unique cluster
 
             filtered_df = df[df["Cluster"] == selected_cluster] # filters table to only rows matching selected cluster
 
             st.write(f"Showing {len(filtered_df)} lost parcels in Cluster {selected_cluster}") # tells user how many packages in that cluster
 
-            view_detail = st.selectbox("View by:", ["Aisle", "Sort Zone"], key="view_select") # dropdown to choose aisle or sort zone view, key gives it unique ID
+            view_detail = st.selectbox("View by:", ["Aisle", "Sort Zone"], key="view_select") # dropdown to choose aisle or sort zone view
 
             location_display = st.radio("Display as:", ["Chart", "Table"], horizontal=True, key="location_display") # toggle between chart and table
 
@@ -119,15 +121,15 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
                 ax.set_ylabel("Lost Parcels") # labels y-axis
                 ax.set_title(f"Lost Parcels in Cluster {selected_cluster} by {view_detail}") # chart title changes based on user selection
                 if view_detail == "Sort Zone": # if user picked sort zone
-                    plt.xticks(rotation=0, ha="right") # rotate labels 45 degrees because sort zone names are long
+                    plt.xticks(rotation=45, ha="right") # rotate labels 45 degrees because sort zone names are long
                 else: # if user picked aisle
                     plt.xticks(rotation=0, ha="center") # keep labels horizontal because aisle names are short
                 plt.tight_layout() # stops labels from getting cut off at edges
                 st.pyplot(fig) # displays the chart in the app
             else:
-                st.dataframe(chart_data.reset_index().rename(columns={"index": view_detail, view_detail: "Lost Parcels"})) # shows as table
+                st.dataframe(chart_data.reset_index().rename(columns={view_detail: "Location", "count": "Lost Parcels"})) # shows as table
 
-            # Size by Zone
+            # Size by Zone within selected cluster
             st.subheader(f"Package Size by Aisle in Cluster {selected_cluster}")
 
             selected_size = st.selectbox("Select Size Category:", sorted(df["Size Category"].dropna().unique()), key="size_select") # dropdown to pick a size
@@ -138,33 +140,44 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
 
             size_zone_data = size_df["Aisle"].value_counts() # counts which aisles lose that size most
 
-            fig6, ax6 = plt.subplots(figsize=(12, 5)) # creates chart canvas
-            ax6.bar(size_zone_data.index, size_zone_data.values, color="red") # draws bars in red
-            ax6.set_xlabel("Aisle") # labels x-axis
-            ax6.set_ylabel("Lost Parcels") # labels y-axis
-            ax6.set_title(f"'{selected_size}' Parcels Lost by Aisle in Cluster {selected_cluster}") # chart title
-            plt.xticks(rotation=0, ha="center") # keeps aisle names horizontal
-            plt.tight_layout() # stops labels getting cut off
-            st.pyplot(fig6) # displays chart in app
+            if len(size_zone_data) > 0: # only draw chart if there's data
+                fig6, ax6 = plt.subplots(figsize=(12, 5)) # creates chart canvas
+                ax6.bar(size_zone_data.index, size_zone_data.values, color="red") # draws bars in red
+                ax6.set_xlabel("Aisle") # labels x-axis
+                ax6.set_ylabel("Lost Parcels") # labels y-axis
+                ax6.set_title(f"'{selected_size}' Parcels Lost by Aisle in Cluster {selected_cluster}") # chart title
+                plt.xticks(rotation=0, ha="center") # keeps aisle names horizontal
+                plt.tight_layout() # stops labels getting cut off
+                st.pyplot(fig6) # displays chart in app
+            else:
+                st.info(f"No '{selected_size}' parcels lost in Cluster {selected_cluster}") # tells user no data for that combo
 
-            # Location Ranking
-            st.subheader(f"Top 10 Focus Areas ({start_date} - {end_date})")
+        # TAB 3: RANKINGS -----------------------------------------------
+        with tab3:
+            st.caption("See the worst performing locations ranked by number of lost parcels.") # tells user what this tab does
 
             rank_view = st.selectbox("Rank by:", ["Sort Zone", "Aisle"], key="rank_select") # dropdown to choose which ranking to show
 
+            rank_display = st.radio("Display as:", ["Chart", "Table"], horizontal=True, key="rank_display") # toggle between chart and table
+
             rank_data = df[rank_view].value_counts().head(10) # top 10 of whichever they picked
 
-            fig8, ax8 = plt.subplots(figsize=(12, 5)) # creates chart canvas
-            ax8.barh(rank_data.index, rank_data.values, color="darkred") # horizontal bar chart
-            ax8.set_xlabel("Lost Parcels") # labels x-axis
-            ax8.set_ylabel(rank_view) # labels y-axis with whatever user picked
-            ax8.set_title(f"Top 10 {rank_view}s with Most Lost Parcels ({start_date} - {end_date})") # chart title changes based on selection
-            ax8.invert_yaxis() # puts worst at the top
-            plt.tight_layout() # stops labels getting cut off
-            st.pyplot(fig8) # displays chart in app
+            if rank_display == "Chart":
+                fig8, ax8 = plt.subplots(figsize=(12, 5)) # creates chart canvas
+                ax8.barh(rank_data.index, rank_data.values, color="darkred") # horizontal bar chart
+                ax8.set_xlabel("Lost Parcels") # labels x-axis
+                ax8.set_ylabel(rank_view) # labels y-axis with whatever user picked
+                ax8.set_title(f"Top 10 {rank_view}s with Most Lost Parcels ({start_date} - {end_date})") # chart title changes based on selection
+                ax8.invert_yaxis() # puts worst at the top
+                plt.tight_layout() # stops labels getting cut off
+                st.pyplot(fig8) # displays chart in app
+            else:
+                st.dataframe(rank_data.reset_index().rename(columns={rank_view: "Location", "count": "Lost Parcels"})) # shows as table
 
-        # TAB 3: DSP & CYCLE --------------------------------------------
-        with tab3:
+        # TAB 4: DSP & CYCLE --------------------------------------------
+        with tab4:
+            st.caption("See which DSPs lose the most parcels and compare performance across dispatch cycles.") # tells user what this tab does
+
             st.subheader(f"Lost Parcels by DSP ({start_date} - {end_date})")
 
             dsp_display = st.radio("Display as:", ["Chart", "Table"], horizontal=True, key="dsp_display") # toggle between chart and table
@@ -177,11 +190,11 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
                 ax2.set_xlabel("DSP") # labels x-axis
                 ax2.set_ylabel("Lost Parcels") # labels y-axis
                 ax2.set_title(f"Lost Parcels by DSP ({start_date} - {end_date})") # chart title with date range
-                plt.xticks(rotation=0, ha="right") # rotates DSP names 45 degrees because they are long
+                plt.xticks(rotation=45, ha="right") # rotates DSP names 45 degrees because they are long
                 plt.tight_layout() # stops labels getting cut off
                 st.pyplot(fig2) # displays chart in the app
             else:
-                st.dataframe(dsp_data.reset_index().rename(columns={"index": "DSP Name", "DSP Name": "Lost Parcels"})) # shows as table
+                st.dataframe(dsp_data.reset_index().rename(columns={"DSP Name": "DSP", "count": "Lost Parcels"})) # shows as table
 
             # Cycle Comparison
             st.subheader(f"Lost Parcels by Cycle ({start_date} - {end_date})")
@@ -197,8 +210,10 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
             plt.tight_layout() # stops labels getting cut off
             st.pyplot(fig4) # displays chart in app
 
-        # TAB 4: TIME ---------------------------------------------------
-        with tab4:
+        # TAB 5: TIME ---------------------------------------------------
+        with tab5:
+            st.caption("See which days of the week have the most losts. Select a day to view individual tracking IDs.") # tells user what this tab does
+
             st.subheader("Lost Parcels by Day of Week")
 
             df["Day of Week"] = df["Last Updated Time"].dt.day_name() # extracts day name
@@ -218,7 +233,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
                 plt.tight_layout() # stops labels getting cut off
                 st.pyplot(fig3) # displays chart in app
             else:
-                st.dataframe(day_data.reset_index().rename(columns={"index": "Day", "Day of Week": "Lost Parcels"})) # shows as table
+                st.dataframe(day_data.reset_index().rename(columns={"Day of Week": "Day", "count": "Lost Parcels"})) # shows as table
 
             # Day breakdown table with tracking IDs
             st.subheader("Lost Parcel Details by Day")
@@ -230,8 +245,10 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
             st.write(f"{len(day_df)} parcels lost on {selected_day}")
             st.dataframe(day_df[["Tracking ID", "Cluster", "Aisle", "Sort Zone", "DSP Name", "Size Category"]]) # shows table with key info
 
-        # TAB 5: EXPORT -------------------------------------------------
-        with tab5:
+        # TAB 6: EXPORT -------------------------------------------------
+        with tab6:
+            st.caption("Download the cleaned data with sensitive information removed and size categories added.") # tells user what this tab does
+
             st.subheader("Export Data")
 
             csv = df.to_csv(index=False) # converts the cleaned dataframe to CSV text
