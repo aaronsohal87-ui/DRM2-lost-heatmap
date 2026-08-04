@@ -43,7 +43,8 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         col1.metric("Total Lost", len(df)) # total number of lost parcels
         col2.metric("Worst Cluster", df["Cluster"].value_counts().index[0]) # cluster with most losts
         col3.metric("Worst Aisle", df["Aisle"].value_counts().index[0]) # aisle with most losts
-        col4.metric("Top DSP", df["DSP Name"].dropna().value_counts().index[0]) # DSP with most losts
+        top_dsp_name = df["DSP Name"].dropna().value_counts().index[0] # gets DSP with most losts
+        col4.metric("Top DSP", top_dsp_name[:15]) # shows first 15 characters to stop it getting cut off
 
         # Parcel Size Grouping ------------------------------------------
         
