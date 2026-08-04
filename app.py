@@ -141,40 +141,25 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.write(f"{len(day_df)} parcels lost on {selected_day}")
         st.dataframe(day_df[["Tracking ID", "Cluster", "Aisle", "Sort Zone", "DSP Name", "Size Category"]]) # shows table with key info 
 
-
-        # Cycle Comparison ----------------------------------------------
+                # Cycle Comparison ----------------------------------------------
 
         st.subheader("Lost Parcels by Cycle")
 
-        cycle_data = df["Assigned Cycle"].dropna().value_counts() # counts losts per cycle
+        # get date range from the data
+        df["Last Updated Time"] = pd.to_datetime(df["Last Updated Time"])
+        start_date = df["Last Updated Time"].min().strftime("%d %b %Y") # earliest date formatted nicely
+        end_date = df["Last Updated Time"].max().strftime("%d %b %Y") # latest date formatted nicely
 
-        fig4, ax4 = plt.subplots(figsize=(10, 5)) # creates chart canvas
-        ax4.bar(cycle_data.index, cycle_data.values, color="purple") # draws bars in purple
-        ax4.set_xlabel("Cycle") # labels x-axis
-        ax4.set_ylabel("Lost Parcels") # labels y-axis
-        ax4.set_title("Lost Parcels by Assigned Cycle") # chart title
-        plt.xticks(rotation=0, ha="center") # keeps labels horizontal
-        plt.tight_layout() # stops labels getting cut off
-        st.pyplot(fig4) # displays chart in app
+        cycle_data = df["Assigned Cycle"].dropna().value_counts()
 
-        # Cycle detail - let user pick a cycle to see its breakdown
-        selected_cycle = st.selectbox("Select Cycle to drill into:", sorted(df["Assigned Cycle"].dropna().unique()), key="cycle_select") # dropdown of all cycles in the data
-
-        cycle_df = df[df["Assigned Cycle"] == selected_cycle] # filters to only that cycle
-
-        st.write(f"{len(cycle_df)} parcels lost in {selected_cycle}")
-
-        # show which clusters/aisles are worst in that cycle
-        fig5, ax5 = plt.subplots(figsize=(12, 5)) # creates chart canvas
-        cycle_cluster_data = cycle_df["Aisle"].value_counts() # counts losts per aisle in that cycle
-        ax5.bar(cycle_cluster_data.index, cycle_cluster_data.values, color="purple") # draws bars
-        ax5.set_xlabel("Aisle") # labels x-axis
-        ax5.set_ylabel("Lost Parcels") # labels y-axis
-        ax5.set_title(f"Lost Parcels by Aisle in {selected_cycle}") # chart title with selected cycle
-        plt.xticks(rotation=0, ha="right") # rotates aisle names
-        plt.tight_layout() # stops labels getting cut off
-        st.pyplot(fig5) # displays chart in app
-
+        fig4, ax4 = plt.subplots(figsize=(10, 5))
+        ax4.bar(cycle_data.index, cycle_data.values, color="purple")
+        ax4.set_xlabel("Cycle")
+        ax4.set_ylabel("Lost Parcels")
+        ax4.set_title(f"Lost Parcels by Cycle ({start_date} - {end_date})") # title now shows date range
+        plt.xticks(rotation=0, ha="center")
+        plt.tight_layout()
+        st.pyplot(fig4)
         
 
 
