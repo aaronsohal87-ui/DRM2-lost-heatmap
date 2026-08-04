@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import matplotlib.pylot as plt
 
 st.title("DRM2 Lost Parcel Heatmap")
 
@@ -70,7 +71,15 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
 
         chart_data = filtered_df[view_detail].value_counts() # counts how many parcels left in the cluster
 
-        st.bar_chart(chart_data) # outputs bar chart of the data
+        # matplotlib chart with horizontal labels
+        fig, ax = plt.subplots(figsize=(12, 5))  # creates a chart canvas 12 wide and 5 tall
+        ax.bar(chart_data.index, chart_data.values) # draws bars
+        ax.set_xlabel(view_detail) # labels axis with what user picked 
+        ax.set_ylabel("Lost Parcels") # y label
+        ax.set_title(f"Lost Parcels in Cluster {selected_cluster} by {view_detail}")
+        plt.xticks(rotation=0, ha="center") # keeps labels horizontal 
+        plt.tight_layout() # stops labels getting cut off at edges
+        st.pyplot(fig) # displays matplotlib chart in Streamlit
         
 
 
