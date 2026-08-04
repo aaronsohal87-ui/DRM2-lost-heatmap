@@ -54,7 +54,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
              
         
         df["Size Category"] = df["Longest Side"].apply(get_size) #records longest side of package and saves it in size category with get_size function applied to it
-        st.write(" Lost Parcel Size Breakdown")
+        st.subheader(" Lost Parcel Size Breakdown")
         st.write(df["Size Category"].value_counts()) # counts how many packages are in size category and displays it on screen
 
         # Summary Table 
