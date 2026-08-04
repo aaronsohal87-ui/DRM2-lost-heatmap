@@ -171,7 +171,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         ax5.set_xlabel("Aisle") # labels x-axis
         ax5.set_ylabel("Lost Parcels") # labels y-axis
         ax5.set_title(f"Lost Parcels by Aisle in {selected_cycle}") # chart title with selected cycle
-        plt.xticks(rotation=45, ha="right") # rotates aisle names
+        plt.xticks(rotation=0, ha="right") # rotates aisle names
         plt.tight_layout() # stops labels getting cut off
         st.pyplot(fig5) # displays chart in app
 
