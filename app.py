@@ -57,15 +57,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.subheader(" Lost Parcel Size Breakdown")
         st.write(df["Size Category"].value_counts()) # counts how many packages are in size category and displays it on screen
 
-        # Summary Table 
-
-        st.subheader("Lost Parcel Summary") 
-
-        summary_tbl = df.groupby(["Cluster", "Size Category"]).size().unstack(fill_value=0) # counts parcels by cluster AND size, makes a table
         
-        summary_tbl["Total"] = summary_tbl.sum(axis=1) # adds a Total column at the end #
-        
-        st.dataframe(summary_tbl) # displays the table in the app
         
       # Interactive Heatmap --------------------------------------------
 
@@ -159,7 +151,17 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         ax4.set_title(f"Lost Parcels by Cycle ({start_date} - {end_date})") # title now shows date range
         plt.xticks(rotation=0, ha="center")
         plt.tight_layout()
-        st.pyplot(fig4)
+        st.pyplot(fig4) 
+
+        # Summary Table 
+
+        st.subheader("Lost Parcel Summary") 
+
+        summary_tbl = df.groupby(["Cluster", "Size Category"]).size().unstack(fill_value=0) # counts parcels by cluster AND size, makes a table
+        
+        summary_tbl["Total"] = summary_tbl.sum(axis=1) # adds a Total column at the end #
+        
+        st.dataframe(summary_tbl) # displays the table in the app
 
 
                 # Size by Zone --------------------------------------------------
