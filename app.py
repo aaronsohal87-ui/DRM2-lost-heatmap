@@ -29,6 +29,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.info("Please check your SCC export filters include these fields, then re-upload.") #user_message failure_and must upload more
     else:
         st.success(f"Data loaded - {df.shape[0]} packages ready for analysis.") #user_message success
+        st.write(f"Check the data table output below")
         st.dataframe(df.head()) #shows first 5 rows of data for user verification
         
         df["Package Length"] = df["Package Length"].str.replace(" cm", "").astype(float) #Takes value in csv from  Length measurement into a number by using float
