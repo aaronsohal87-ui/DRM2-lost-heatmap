@@ -107,7 +107,25 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         ax2.set_title(f"Lost Parcels by DSP in Cluster {selected_cluster}") # chart title with selected cluster
         plt.xticks(rotation=45, ha="right") # rotates DSP names 45 degrees because they are long
         plt.tight_layout() # stops labels getting cut off
-        st.pyplot(fig2) # displays second chart in the ap
+        st.pyplot(fig2) # displays second chart in the ap 
+
+
+        # Time of Day Analysis -------------------------------------------------- 
+
+        st.subheader("Lost parcels by time of day") 
+
+        df["Last Updated Time"] = pd.to_datetime(df["Last Updated Time"]) # converts text timestamp to actual date/time format
+
+        df["Hour"] = df["Last Updated Time"].dt.hour # extracts just the hour (0-23) from the timestamp
+
+        fig3, ax3 = plt.subplots(figsize=(12, 5)) # creates third chart canvas
+        hour_data = df["Hour"].value_counts().sort_index() # counts losts per hour, sort_index puts them in order 0-23
+        ax3.bar(hour_data.index, hour_data.values, color="green") # draws bars in green
+        ax3.set_xlabel("Hour of Day") # labels x-axis
+        ax3.set_ylabel("Lost Parcels") # labels y-axis
+        ax3.set_title("Lost Parcels by Hour of Day") # chart title
+        ax3.set_xticks(range(0, 24)) # shows every hour 0-23 on x-axis
+        plt.tight_layout() # stops labels getting cut off
 
 
         
