@@ -60,7 +60,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
 
         st.subheader("Lost Parcels by Location") # displays small heading
 
-        selected_cluster = st.selectbox("Select Cluster:" , sorted(df["Cluster"].unique())) # creates a dropdown menu of every unique cluster 
+        selected_cluster = st.selectbox("Select Cluster:" , sorted(df["Cluster"].unique()) # creates a dropdown menu of every unique cluster 
 
         filtered_df = df[df["Cluster"] == selected_cluster] # Filters table to only rows where cluster matches what user picks 
 
