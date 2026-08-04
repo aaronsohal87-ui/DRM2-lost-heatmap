@@ -51,7 +51,16 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         
         df["Size Category"] = df["Longest Side"].apply(get_size) #records longest side of package and saves it in size category with get_size function applied to it
         st.write(" Lost Parcel Size Breakdown")
-        st.write(df["Size Category"].value_counts()) # counts how many packages are in size category and displays it on screen
+        st.write(df["Size Category"].value_counts()) # counts how many packages are in size category and displays it on screen 
+        
+        # Interactive Heatmap 
+
+        st.subheader("Lost Parcels by Location") # displays small heading
+        view = st.selectbox("View by:", ["Cluster", "Aisle", "Sort Zone"]) #creates a dropdown menu where user can pick one option 
+        chart_data = df[view].value_counts() # Counts how many lost parcels are in each zone/aisle/cluster 
+        st.bar_chart(chart_data)
+        
+
 
 
 
