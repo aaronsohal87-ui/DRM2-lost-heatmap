@@ -94,9 +94,9 @@ if uploaded_file is not None:
 
             if len(df["DSP Name"].dropna()) > 0:
                 top_dsp_name = df["DSP Name"].dropna().value_counts().index[0]
-                col4.metric("Top DSP", top_dsp_name[:15])
+                col4.metric("Worst DSP", top_dsp_name[:15])
             else:
-                col4.metric("Top DSP", "N/A")
+                col4.metric("Worst DSP", "N/A")
 
             if len(df) < 5:
                 st.info("Small dataset — analysis may be less meaningful. Consider uploading a full week.")
