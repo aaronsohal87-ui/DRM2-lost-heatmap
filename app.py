@@ -66,7 +66,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
 
         st.write(f"Showing {len(filtered_df)} lost parcels in Cluster {selected_cluster}") # tells user how many packages are in the cluster
         
-        view_detail = st.selectbox("View by:" ,["Aisle", "Sort Zone"] # creates selection boxes which allows user to choose what they want to view data by 
+        view_detail = st.selectbox("View by:" ,["Aisle", "Sort Zone"]) # creates selection boxes which allows user to choose what they want to view data by 
 
         chart_data = filtered_df[view_detail].value_counts() # counts how many parcels left in the cluster
 
