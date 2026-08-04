@@ -32,7 +32,18 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
     else:
         st.success(f"Data loaded - {df.shape[0]} packages ready for analysis.") #user_message success
         st.info("Check the data table output below")
-        st.dataframe(df.head()) #shows first 5 rows of data for user verification
+        st.dataframe(df.head()) #shows first 5 rows of data for user verification 
+
+        # Summary Stats -------------------------------------------------
+
+        st.subheader("Quick Summary")
+
+        col1, col2, col3, col4 = st.columns(4) # creates 4 columns side by side
+
+        col1.metric("Total Lost", len(df)) # total number of lost parcels
+        col2.metric("Worst Cluster", df["Cluster"].value_counts().index[0]) # cluster with most losts
+        col3.metric("Worst Aisle", df["Aisle"].value_counts().index[0]) # aisle with most losts
+        col4.metric("Top DSP", df["DSP Name"].dropna().value_counts().index[0]) # DSP with most losts
 
         # Parcel Size Grouping ------------------------------------------
         
