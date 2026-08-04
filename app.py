@@ -57,43 +57,47 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.write(" Lost Parcel Size Breakdown")
         st.write(df["Size Category"].value_counts()) # counts how many packages are in size category and displays it on screen 
         
-        # Interactive Heatmap --------------------------------------------
+      # Interactive Heatmap --------------------------------------------
 
-        st.subheader("Lost Parcels by Location") # displays small heading
+        st.subheader("Lost Parcels by Location") # displays section heading
 
-        selected_cluster = st.selectbox("Select Cluster:" , sorted(df["Cluster"].dropna().unique())) # creates a dropdown menu of every unique cluster 
+        selected_cluster = st.selectbox("Select Cluster:", sorted(df["Cluster"].dropna().unique()), key="cluster_select") # dropdown of every unique cluster, key gives it a unique ID so Streamlit doesn't mix it up with other dropdowns
 
-        filtered_df = df[df["Cluster"] == selected_cluster] # Filters table to only rows where cluster matches what user picks 
+        filtered_df = df[df["Cluster"] == selected_cluster] # filters table to only rows matching selected cluster
 
-        st.write(f"Showing {len(filtered_df)} lost parcels in Cluster {selected_cluster}") # tells user how many packages are in the cluster
-        
-        view_detail = st.selectbox("View by:" ,["Aisle", "Sort Zone"]) # creates selection boxes which allows user to choose what they want to view data by 
+        st.write(f"Showing {len(filtered_df)} lost parcels in Cluster {selected_cluster}") # tells user how many packages in that cluster
 
-        chart_data = filtered_df[view_detail].value_counts() # counts how many parcels left in the cluster
+        view_detail = st.selectbox("View by:", ["Aisle", "Sort Zone"], key="view_select") # dropdown to choose aisle or sort zone view, key gives it unique ID
 
-        # matplotlib chart with horizontal labels
-        fig, ax = plt.subplots(figsize=(12, 5))  # creates a chart canvas 12 wide and 5 tall
-        ax.bar(chart_data.index, chart_data.values) # draws bars
-        ax.set_xlabel(view_detail) # labels axis with what user picked 
-        ax.set_ylabel("Lost Parcels") # y label
-        ax.set_title(f"Lost Parcels in Cluster {selected_cluster} by {view_detail}")
-        plt.xticks(rotation=0, ha="center") # keeps labels horizontal 
-        plt.tight_layout() # stops labels getting cut off at edges
-        st.pyplot(fig) # displays matplotlib chart in Streamlit 
+        chart_data = filtered_df[view_detail].value_counts() # counts lost parcels per aisle/zone in that cluster
 
-        #DSP Breakdown ---------------------------------------------- 
+        # location chart
+        fig, ax = plt.subplots(figsize=(14, 5)) # creates chart canvas, 14 wide 5 tall
+        ax.bar(chart_data.index, chart_data.values) # draws bars, index = labels, values = heights
+        ax.set_xlabel(view_detail) # labels x-axis with whatever user picked
+        ax.set_ylabel("Lost Parcels") # labels y-axis
+        ax.set_title(f"Lost Parcels in Cluster {selected_cluster} by {view_detail}") # chart title changes based on user selection
+        if view_detail == "Sort Zone": # if user picked sort zone
+            plt.xticks(rotation=45, ha="right") # rotate labels 45 degrees because sort zone names are long
+        else: # if user picked aisle
+            plt.xticks(rotation=0, ha="center") # keep labels horizontal because aisle names are short
+        plt.tight_layout() # stops labels from getting cut off at edges
+        st.pyplot(fig) # displays the chart in the app
 
-        st.subheader("Lost Parcels by DSP")  
+        # DSP Breakdown -------------------------------------------------
 
-        selected_cluster = st.selectbox("Select Cluster:" , sorted(df["DSP Name"].dropna().unique())) 
-        fig2 , ax2 = plt.subplots(figsize=(12,5)) 
-        ax2.bar(chart_data.index, chart_data.values)
-        ax2.set_xlabel("DSP")
-        ax2.set_ylabel("Number of Lost Parcels")
-        ax2.set_title(f"Lost Parcels by DSP in Cluster {selected_cluster}")
-        plt.xticks(rotation=0, ha = "right")
-        st.pyplot(fig2)
+        st.subheader(f"Lost Parcels by DSP in Cluster {selected_cluster}") # section heading that updates with selected cluster
 
+        dsp_data = filtered_df["DSP Name"].dropna().value_counts() # counts losts per DSP in selected cluster, dropna removes empty values
+
+        fig2, ax2 = plt.subplots(figsize=(12, 5)) # creates second chart canvas
+        ax2.bar(dsp_data.index, dsp_data.values, color="orange") # draws bars in orange to visually separate from first chart
+        ax2.set_xlabel("DSP") # labels x-axis
+        ax2.set_ylabel("Lost Parcels") # labels y-axis
+        ax2.set_title(f"Lost Parcels by DSP in Cluster {selected_cluster}") # chart title with selected cluster
+        plt.xticks(rotation=45, ha="right") # rotates DSP names 45 degrees because they are long
+        plt.tight_layout() # stops labels getting cut off
+        st.pyplot(fig2) # displays second chart in the ap
 
 
         
