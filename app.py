@@ -164,7 +164,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.dataframe(summary_tbl) # displays the table in the app
 
 
-                # Size by Zone --------------------------------------------------
+        # Size by Zone --------------------------------------------------
 
         st.subheader(f"Package Size by Aisle ({start_date} - {end_date})")
 
@@ -183,7 +183,22 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         ax6.set_title(f"'{selected_size}' Parcels Lost by Aisle") # chart title
         plt.xticks(rotation=0, ha="right") # rotates aisle names
         plt.tight_layout() # stops labels getting cut off
-        st.pyplot(fig6) # displays chart in app
+        st.pyplot(fig6) # displays chart in app 
+
+        # Top 10 Worst Sort Zones ---------------------------------------
+
+        st.subheader(f"Top 10 Worst Sort Zones ({start_date} - {end_date})")
+
+        top_zones = df["Sort Zone"].value_counts().head(10) # gets the 10 sort zones with most losts
+
+        fig7, ax7 = plt.subplots(figsize=(12, 5)) # creates chart canvas
+        ax7.barh(top_zones.index, top_zones.values, color="darkred") # horizontal bar chart
+        ax7.set_xlabel("Lost Parcels") # labels x-axis
+        ax7.set_ylabel("Sort Zone") # labels y-axis
+        ax7.set_title(f"Top 10 Sort Zones with Most Lost Parcels ({start_date} - {end_date})") # chart title with date range
+        ax7.invert_yaxis() # puts worst zone at the top
+        plt.tight_layout() # stops labels getting cut off
+        st.pyplot(fig7) # displays chart in app
 
 
 
