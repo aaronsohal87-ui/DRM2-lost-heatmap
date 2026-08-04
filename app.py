@@ -119,7 +119,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
                 ax.set_ylabel("Lost Parcels") # labels y-axis
                 ax.set_title(f"Lost Parcels in Cluster {selected_cluster} by {view_detail}") # chart title changes based on user selection
                 if view_detail == "Sort Zone": # if user picked sort zone
-                    plt.xticks(rotation=45, ha="right") # rotate labels 45 degrees because sort zone names are long
+                    plt.xticks(rotation=0, ha="right") # rotate labels 45 degrees because sort zone names are long
                 else: # if user picked aisle
                     plt.xticks(rotation=0, ha="center") # keep labels horizontal because aisle names are short
                 plt.tight_layout() # stops labels from getting cut off at edges
@@ -177,7 +177,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
                 ax2.set_xlabel("DSP") # labels x-axis
                 ax2.set_ylabel("Lost Parcels") # labels y-axis
                 ax2.set_title(f"Lost Parcels by DSP ({start_date} - {end_date})") # chart title with date range
-                plt.xticks(rotation=45, ha="right") # rotates DSP names 45 degrees because they are long
+                plt.xticks(rotation=0, ha="right") # rotates DSP names 45 degrees because they are long
                 plt.tight_layout() # stops labels getting cut off
                 st.pyplot(fig2) # displays chart in the app
             else:
