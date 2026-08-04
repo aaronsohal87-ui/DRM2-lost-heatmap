@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 
-st.title("DRM2 Lost Parcel Heatmap")
+st.title("SCC Lost Parcel Heatmap")
 
 uploaded_file = st.file_uploader("Upload SCC export as a .csv file please to generate the heatmap", type="csv") # says what filetype is uploaded
 
@@ -122,7 +122,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.pyplot(fig3) # displays chart in app 
 
 
-                # Day breakdown table with tracking IDs -------------------------
+        # Day breakdown table with tracking IDs -------------------------
 
         st.subheader("Lost Parcel Details by Day")
 
@@ -133,7 +133,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.write(f"{len(day_df)} parcels lost on {selected_day}")
         st.dataframe(day_df[["Tracking ID", "Cluster", "Aisle", "Sort Zone", "DSP Name", "Size Category"]]) # shows table with key info 
 
-                # Cycle Comparison ----------------------------------------------
+        # Cycle Comparison ----------------------------------------------
 
         st.subheader("Lost Parcels by Cycle")
 
@@ -184,6 +184,21 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         plt.xticks(rotation=0, ha="right") # rotates aisle names
         plt.tight_layout() # stops labels getting cut off
         st.pyplot(fig6) # displays chart in app 
+
+        # Aisle Ranking -------------------------------------------------
+
+        st.subheader(f"All Aisles Ranked by Lost Parcels ({start_date} - {end_date})")
+
+        aisle_data = df["Aisle"].value_counts() # counts losts per aisle, ranked most to least
+
+        fig8, ax8 = plt.subplots(figsize=(12, 5)) # creates chart canvas
+        ax8.barh(aisle_data.index, aisle_data.values, color="crimson") # horizontal bar chart
+        ax8.set_xlabel("Lost Parcels") # labels x-axis
+        ax8.set_ylabel("Aisle") # labels y-axis
+        ax8.set_title(f"Aisles Ranked by Lost Parcels ({start_date} - {end_date})") # chart title with date range
+        ax8.invert_yaxis() # puts worst aisle at the top
+        plt.tight_layout() # stops labels getting cut off
+        st.pyplot(fig8) # displays chart in app
 
         # Top 10 Worst Sort Zones ---------------------------------------
 
