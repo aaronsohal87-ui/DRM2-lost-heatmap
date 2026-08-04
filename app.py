@@ -110,23 +110,25 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.pyplot(fig2) # displays second chart in the ap 
 
 
-        # Time of Day Analysis -------------------------------------------------- 
+      # Day of Week Analysis ------------------------------------------
 
-        st.subheader("Lost parcels by time of day") 
+        st.subheader("Lost Parcels by Day of Week")
 
-        df["Last Updated Time"] = pd.to_datetime(df["Last Updated Time"]) # converts text timestamp to actual date/time format
+        df["Last Updated Time"] = pd.to_datetime(df["Last Updated Time"]) # converts text to date/time
+        df["Day of Week"] = df["Last Updated Time"].dt.day_name() # extracts day name (Monday, Tuesday etc.)
 
-        df["Hour"] = df["Last Updated Time"].dt.hour # extracts just the hour (0-23) from the timestamp
+        # put days in correct order
+        day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        day_data = df["Day of Week"].value_counts().reindex(day_order, fill_value=0) # counts losts per day, in correct order
 
-        fig3, ax3 = plt.subplots(figsize=(12, 5)) # creates third chart canvas
-        hour_data = df["Hour"].value_counts().sort_index() # counts losts per hour, sort_index puts them in order 0-23
-        ax3.bar(hour_data.index, hour_data.values, color="green") # draws bars in green
-        ax3.set_xlabel("Hour of Day") # labels x-axis
+        fig3, ax3 = plt.subplots(figsize=(10, 5)) # creates chart canvas
+        ax3.bar(day_data.index, day_data.values, color="green") # draws bars in green
+        ax3.set_xlabel("Day of Week") # labels x-axis
         ax3.set_ylabel("Lost Parcels") # labels y-axis
-        ax3.set_title("Lost Parcels by Hour of Day") # chart title
-        ax3.set_xticks(range(0, 24)) # shows every hour 0-23 on x-axis
+        ax3.set_title("Lost Parcels by Day of Week") # chart title
+        plt.xticks(rotation=0, ha="center") # keeps day names horizontal
         plt.tight_layout() # stops labels getting cut off
-
+        st.pyplot(fig3) # displays chart in app
 
         
 
