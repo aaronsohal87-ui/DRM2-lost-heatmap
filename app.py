@@ -213,7 +213,32 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         ax7.set_title(f"Top 10 Sort Zones with Most Lost Parcels ({start_date} - {end_date})") # chart title with date range
         ax7.invert_yaxis() # puts worst zone at the top
         plt.tight_layout() # stops labels getting cut off
-        st.pyplot(fig7) # displays chart in app
+        st.pyplot(fig7) # displays chart in app 
+
+
+        # Location Ranking ----------------------------------------------
+
+        st.subheader(f"Location Ranking ({start_date} - {end_date})")
+
+        rank_view = st.selectbox("Rank by:", ["Sort Zone (Top 10)", "Aisle (All)"], key="rank_select") # dropdown to choose which ranking to show
+
+        if rank_view == "Sort Zone (Top 10)":
+            rank_data = df["Sort Zone"].value_counts().head(10) # top 10 worst sort zones
+            chart_title = f"Top 10 Sort Zones with Most Lost Parcels ({start_date} - {end_date})"
+            y_label = "Sort Zone"
+        else:
+            rank_data = df["Aisle"].value_counts() # all aisles ranked
+            chart_title = f"Aisles Ranked by Lost Parcels ({start_date} - {end_date})"
+            y_label = "Aisle"
+
+        fig8, ax8 = plt.subplots(figsize=(12, 5)) # creates chart canvas
+        ax8.barh(rank_data.index, rank_data.values, color="darkred") # horizontal bar chart
+        ax8.set_xlabel("Lost Parcels") # labels x-axis
+        ax8.set_ylabel(y_label) # labels y-axis with whatever user picked
+        ax8.set_title(chart_title) # chart title changes based on selection
+        ax8.invert_yaxis() # puts worst at the top
+        plt.tight_layout() # stops labels getting cut off
+        st.pyplot(fig8) # displays chart in app
 
 
 
