@@ -86,13 +86,13 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.subheader("Lost Parcels by DSP")  
 
         selected_cluster = st.selectbox("Select Cluster:" , sorted(df["DSP Name"].dropna().unique())) 
-        fig, ax = plt.subplots(figsize=(12,5)) 
+        fig2 , ax2 = plt.subplots(figsize=(12,5)) 
         ax2.bar(chart_data.index, chart_data.values)
         ax2.set_xlabel("DSP")
         ax2.set_ylabel("Number of Lost Parcels")
         ax2.set_title(f"Lost Parcels by DSP in Cluster {selected_Cluster}")
         plt.xticks(rotation=0, ha = "right")
-        st.pyplot(fig)
+        st.pyplot(fig2)
 
 
 
