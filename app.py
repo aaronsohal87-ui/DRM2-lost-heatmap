@@ -64,7 +64,7 @@ if uploaded_file is not None: # only runs if user has uploaded a file
         col2.metric("Worst Cluster", df["Cluster"].value_counts().index[0]) # cluster with most losts
         col3.metric("Worst Aisle", df["Aisle"].value_counts().index[0]) # aisle with most losts
         top_dsp_name = df["DSP Name"].dropna().value_counts().index[0] # DSP with most losts
-        col4.metric("Top DSP", top_dsp_name[:15]) # first 15 chars to prevent overflow
+        col4.metric("Worst DSP", top_dsp_name[:15]) # first 15 chars to prevent overflow
 
         # Tabs ----------------------------------------------------------
         tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Overview", "Location", "Rankings", "DSP & Cycle", "Time", "Export"])
