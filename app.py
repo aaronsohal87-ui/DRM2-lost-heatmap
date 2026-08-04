@@ -30,3 +30,26 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
     else:
         st.success(f"Data loaded - {df.shape[0]} packages ready for analysis.") #user_message success
         st.dataframe(df.head()) #shows first 5 rows of data for user verification
+        
+        df["Package Length"] = df["Package Length"].str.replace(" cm", "").astype(float) #Takes value in csv from  Length measurement into a number by using float
+        df["Package Width"] = df["Package Width"].str.replace(" cm", "").astype(float) #Takes value in csv from Width measurement into number using float
+        df["Package Height"] = df["Package Height"].str.replace(" cm","").astype(float) #Takes value in csv from Height measurement into number using float
+
+        df["Longest Side"] = df[["Package Length"], ["Package Width"], ["Package Height"]]
+
+        # function which assigns package a size value based on its dimensions
+        def get_size(longest): 
+            if longest <= 35: 
+                return "Small"
+            elif longest <= 45:
+                return "Medium"
+            elif longest <= 61: 
+                return "Small Oversize"
+            elif longest <= 75: 
+                return "Large Oversize" 
+        
+        df["Size Category"] = df["Longest Side"].apply(get_size) #records longest side of package and saves it in size category with get_size function applied to it
+        st.write("Size Breakdown")
+        st.write(df["Size Category"].value_counts()) # counts how many packages are in size category and displays it on screen
+
+
