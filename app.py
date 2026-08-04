@@ -110,22 +110,38 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.pyplot(fig2) # displays second chart in the ap 
 
 
-      # Day of Week Analysis ------------------------------------------
+        # Day of Week by Shift Analysis ---------------------------------
 
-        st.subheader("Lost Parcels by Day of Week")
+        st.subheader("Lost Parcels by Day and Shift")
 
-        df["Last Updated Time"] = pd.to_datetime(df["Last Updated Time"]) # converts text to date/time
-        df["Day of Week"] = df["Last Updated Time"].dt.day_name() # extracts day name (Monday, Tuesday etc.)
+        df["Dispatch Time"] = pd.to_datetime(df["Dispatch Time"]) # converts dispatch time text to date/time format
+
+        # function to assign shift based on hour
+        def get_shift(hour):
+            if hour < 7:
+                return "NS"
+            elif hour < 15:
+                return "AM"
+            else:
+                return "PM"
+
+        df["Shift"] = df["Dispatch Time"].dt.hour.apply(get_shift) # extracts hour and assigns shift label
+        df["Day of Week"] = df["Dispatch Time"].dt.day_name() # extracts day name
 
         # put days in correct order
         day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        day_data = df["Day of Week"].value_counts().reindex(day_order, fill_value=0) # counts losts per day, in correct order
 
+        # count losts per day per shift
+        shift_data = df.groupby(["Day of Week", "Shift"]).size().unstack(fill_value=0) # creates table: rows = days, columns = shifts
+        shift_data = shift_data.reindex(day_order, fill_value=0) # puts days in correct order
+
+        # stacked bar chart
         fig3, ax3 = plt.subplots(figsize=(10, 5)) # creates chart canvas
-        ax3.bar(day_data.index, day_data.values, color="green") # draws bars in green
+        shift_data.plot(kind="bar", stacked=True, ax=ax3, color={"NS": "navy", "AM": "orange", "PM": "green"}) # stacked bars coloured by shift
         ax3.set_xlabel("Day of Week") # labels x-axis
         ax3.set_ylabel("Lost Parcels") # labels y-axis
-        ax3.set_title("Lost Parcels by Day of Week") # chart title
+        ax3.set_title("Lost Parcels by Day and Shift") # chart title
+        ax3.legend(title="Shift") # shows colour legend
         plt.xticks(rotation=0, ha="center") # keeps day names horizontal
         plt.tight_layout() # stops labels getting cut off
         st.pyplot(fig3) # displays chart in app
