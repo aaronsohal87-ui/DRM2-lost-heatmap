@@ -9,7 +9,8 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
     df = pd.read_csv(uploaded_file) # scans and reads csv file
     st.write("Data Size:", df.shape) # outputs size of table user inputs
 
-    # create sensitive columns list
+    # Sensitive Data Check --------------------------------------------
+    
     sensitive_columns = ["Last Scan By", "Driver Id", "Holder Name", "City", "Postal", "Province", "Ordering Order ID", "Order Amount", "Receivable Amount", "Payment Method", "District", "Scheduled Delivery End Time"]
 
     found_sensitive = [col for col in sensitive_columns if col in df.columns] # go through sensitive column titles and check which ones actually exist in uploaded file
@@ -31,16 +32,15 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.success(f"Data loaded - {df.shape[0]} packages ready for analysis.") #user_message success
         st.info("Check the data table output below")
         st.dataframe(df.head()) #shows first 5 rows of data for user verification
+
+        # Parcel Size Grouping ------------------------------------------
         
         df["Package Length"] = df["Package Length"].str.replace(" cm", "").astype(float) #Takes value in csv from  Length measurement into a number by using float
         df["Package Width"] = df["Package Width"].str.replace(" cm", "").astype(float) #Takes value in csv from Width measurement into number using float
         df["Package Height"] = df["Package Height"].str.replace(" cm","").astype(float) #Takes value in csv from Height measurement into number using float
 
         df["Longest Side"] = df[["Package Length", "Package Width", "Package Height"]].max(axis=1) # .max(axis=1) looks at all 3 values and picks the largest value
-
-        # function which assigns package a size value based on its dimensions
-        def get_size(longest): 
-            if longest <= 35: 
+ 
                 return "Small"
             elif longest <= 45:
                 return "Medium"
@@ -53,12 +53,21 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         st.write(" Lost Parcel Size Breakdown")
         st.write(df["Size Category"].value_counts()) # counts how many packages are in size category and displays it on screen 
         
-        # Interactive Heatmap 
+        # Interactive Heatmap --------------------------------------------
 
         st.subheader("Lost Parcels by Location") # displays small heading
-        view = st.selectbox("View by:", ["Cluster", "Aisle", "Sort Zone"]) #creates a dropdown menu where user can pick one option 
-        chart_data = df[view].value_counts() # Counts how many lost parcels are in each zone/aisle/cluster 
-        st.bar_chart(chart_data)
+
+        selected_cluster = st.selectbox("Select Cluster:" , sorted(df["Cluster"].unique())) # creates a dropdown menu of every unique cluster 
+
+        filtered_df = df[df["Cluster"] == selected_cluster] # Filters table to only rows where cluster matches what user picks 
+
+        st.write(f"Showing {len(filtered_df)} lost parcels in Cluster {selected_cluster}") # tells user how many packages are in the cluster
+        
+        view_detail = st.selectbox("View by:" ,["Aisle", "Sort Zone"] # creates selection boxes which allows user to choose what they want to view data by 
+
+        chart_data = filtered_df[view_detail].value_counts() # counts how many parcels left in the cluster
+
+        st.bar_chart(chart_data) # outputs bar chart of the data
         
 
 
