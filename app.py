@@ -40,7 +40,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         df["Package Height"] = df["Package Height"].str.replace(" cm","").astype(float) #Takes value in csv from Height measurement into number using float
 
         df["Longest Side"] = df[["Package Length", "Package Width", "Package Height"]].max(axis=1) # .max(axis=1) looks at all 3 values and picks the largest value
-                 return "Small"
+                return "Small"
             elif longest <= 45:
                 return "Medium"
             elif longest <= 61: 
