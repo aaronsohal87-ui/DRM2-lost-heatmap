@@ -35,7 +35,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         df["Package Width"] = df["Package Width"].str.replace(" cm", "").astype(float) #Takes value in csv from Width measurement into number using float
         df["Package Height"] = df["Package Height"].str.replace(" cm","").astype(float) #Takes value in csv from Height measurement into number using float
 
-        df["Longest Side"] = df[["Package Length", "Package Width", "Package Height"]]
+        df["Longest Side"] = df[["Package Length", "Package Width", "Package Height"]].max(axis=1) # .max(axis=1) looks at all 3 values and picks the largest value
 
         # function which assigns package a size value based on its dimensions
         def get_size(longest): 
