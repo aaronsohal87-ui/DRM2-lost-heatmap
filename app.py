@@ -148,7 +148,7 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
             st.pyplot(fig6) # displays chart in app
 
             # Location Ranking
-            st.subheader(f"Top 10 Location Ranking ({start_date} - {end_date})")
+            st.subheader(f"Top 10 Focus Areas ({start_date} - {end_date})")
 
             rank_view = st.selectbox("Rank by:", ["Sort Zone", "Aisle"], key="rank_select") # dropdown to choose which ranking to show
 
