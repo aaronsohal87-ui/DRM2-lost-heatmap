@@ -67,7 +67,7 @@ if uploaded_file is not None: # only runs if user has uploaded a file
         col4.metric("Worst DSP", top_dsp_name[:15]) # first 15 chars to prevent overflow
 
         # Tabs ----------------------------------------------------------
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Overview", "Location", "Rankings", "DSP & Cycle", "Time", "Export"])
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Overview", "Location", "Rankings", "DSP & Cycle", "Time", "Export", "Bridge"])
 
         # TAB 1: OVERVIEW -----------------------------------------------
         with tab1:
@@ -270,4 +270,67 @@ if uploaded_file is not None: # only runs if user has uploaded a file
                 data=csv, # the CSV content
                 file_name="Lost_Parcels_Cleaned.csv", # name of downloaded file
                 mime="text/csv" # tells browser it's a CSV
-            )
+            ) 
+
+                # TAB 7: BRIDGE -------------------------------------------------
+        with tab7:
+            st.caption("Auto-generates a lost parcels bridge draft. Copy the Quick prompt for AI-enhanced action plans.")
+
+            # --- CALCULATE KEY STATS ---
+            total_lost = len(df)
+            worst_cluster = df["Cluster"].value_counts().index[0]
+            worst_cluster_count = df["Cluster"].value_counts().values[0]
+            worst_cluster_pct = round(worst_cluster_count / total_lost * 100, 1)
+
+            worst_aisle = df["Aisle"].value_counts().index[0]
+            worst_aisle_count = df["Aisle"].value_counts().values[0]
+
+            worst_dsp = df["DSP Name"].dropna().value_counts().index[0]
+            worst_dsp_count = df["DSP Name"].dropna().value_counts().values[0]
+            avg_dsp_count = df["DSP Name"].dropna().value_counts().mean()
+            worst_dsp_multiple = round(worst_dsp_count / avg_dsp_count, 1)
+
+            worst_size = df["Size Category"].value_counts().index[0]
+            worst_size_count = df["Size Category"].value_counts().values[0]
+
+            top_cycle = df["Assigned Cycle"].dropna().value_counts().index[0]
+            top_cycle_count = df["Assigned Cycle"].dropna().value_counts().values[0]
+
+            # --- GENERATE DRAFT BRIDGE ---
+            bridge_text = f"""Lost Parcels Bridge - DRM2
+{start_date} - {end_date}
+
+Lost (Total): {total_lost}
+
+RC1) Cluster {worst_cluster}: {worst_cluster_count} parcels ({worst_cluster_pct}% of all losts) — Worst aisle: {worst_aisle} ({worst_aisle_count} parcels)
+RC2) DSP {worst_dsp}: {worst_dsp_count} parcels ({worst_dsp_multiple}x station average)
+RC3) {worst_size} parcels: {worst_size_count} lost — most common size category
+
+AC1: Additional Problem Solver assigned to Cluster {worst_cluster} during {top_cycle} to investigate and resolve issues in Aisle {worst_aisle} which accounts for the highest concentration of losts.
+AC2: DSP {worst_dsp} to be briefed on correct pick-and-stage process — currently {worst_dsp_multiple}x station average for lost parcels this period.
+AC3: OS to conduct stow audit in Cluster {worst_cluster} focusing on {worst_size} parcel handling to ensure correct placement and reduce misplacement.
+AC4: Daily PS huddle to review previous day's losts by cluster and assign targeted investigations based on volume and repeat locations.
+"""
+
+            st.subheader("Draft Bridge")
+            st.text_area("Edit as needed:", value=bridge_text, height=350) # editable text box
+
+            # --- ENHANCE WITH QUICK ---
+            st.subheader("Enhance with Quick")
+            st.write("For better action plans, copy the prompt below and paste into Quick online.")
+
+            quick_prompt = f"""Write me a Lost Parcels bridge for DRM2 in the same style as a PS Effectiveness bridge. Use RC1, RC2, RC3 for root causes and AC1, AC2, AC3, AC4 for action plans. Make actions specific, realistic, and different from last week.
+
+Data ({start_date} - {end_date}):
+- Total lost: {total_lost}
+- Worst cluster: {worst_cluster} ({worst_cluster_count} parcels, {worst_cluster_pct}%)
+- Worst aisle: {worst_aisle} ({worst_aisle_count} parcels)
+- Worst DSP: {worst_dsp} ({worst_dsp_count} parcels, {worst_dsp_multiple}x average)
+- Most common size lost: {worst_size} ({worst_size_count} parcels)
+- Top cycle: {top_cycle} ({top_cycle_count} parcels)
+
+Generate realistic, specific action plans that a station manager would actually implement. Keep the tone professional and concise.
+"""
+
+            st.code(quick_prompt, language="text") # has copy icon in top-right corner
+            st.info("Click the copy icon (top-right corner above) → Open Quick → Ctrl+V")
