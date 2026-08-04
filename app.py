@@ -127,7 +127,19 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         ax3.set_title("Lost Parcels by Day of Week") # chart title
         plt.xticks(rotation=0, ha="center") # keeps day names horizontal
         plt.tight_layout() # stops labels getting cut off
-        st.pyplot(fig3) # displays chart in app
+        st.pyplot(fig3) # displays chart in app 
+
+
+                # Day breakdown table with tracking IDs -------------------------
+
+        st.subheader("Lost Parcel Details by Day")
+
+        selected_day = st.selectbox("Select Day:", day_order, key="day_select") # dropdown to pick a day
+
+        day_df = df[df["Day of Week"] == selected_day] # filters to only that day
+
+        st.write(f"{len(day_df)} parcels lost on {selected_day}")
+        st.dataframe(day_df[["Tracking ID", "Cluster", "Aisle", "Sort Zone", "DSP Name", "Size Category"]]) # shows table with key info
 
         
 
