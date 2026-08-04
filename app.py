@@ -160,7 +160,28 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         plt.xticks(rotation=0, ha="center")
         plt.tight_layout()
         st.pyplot(fig4)
-        
+
+
+                # Size by Zone --------------------------------------------------
+
+        st.subheader(f"Package Size by Aisle ({start_date} - {end_date})")
+
+        selected_size = st.selectbox("Select Size Category:", sorted(df["Size Category"].dropna().unique()), key="size_select") # dropdown to pick a size
+
+        size_df = df[df["Size Category"] == selected_size] # filters to only that size
+
+        st.write(f"{len(size_df)} '{selected_size}' parcels lost")
+
+        size_zone_data = size_df["Aisle"].value_counts() # counts which aisles lose that size most
+
+        fig6, ax6 = plt.subplots(figsize=(12, 5)) # creates chart canvas
+        ax6.bar(size_zone_data.index, size_zone_data.values, color="red") # draws bars in red
+        ax6.set_xlabel("Aisle") # labels x-axis
+        ax6.set_ylabel("Lost Parcels") # labels y-axis
+        ax6.set_title(f"'{selected_size}' Parcels Lost by Aisle") # chart title
+        plt.xticks(rotation=45, ha="right") # rotates aisle names
+        plt.tight_layout() # stops labels getting cut off
+        st.pyplot(fig6) # displays chart in app
 
 
 
