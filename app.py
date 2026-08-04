@@ -55,7 +55,17 @@ if uploaded_file is not None: # prevents app from crashing without an uploaded f
         
         df["Size Category"] = df["Longest Side"].apply(get_size) #records longest side of package and saves it in size category with get_size function applied to it
         st.write(" Lost Parcel Size Breakdown")
-        st.write(df["Size Category"].value_counts()) # counts how many packages are in size category and displays it on screen 
+        st.write(df["Size Category"].value_counts()) # counts how many packages are in size category and displays it on screen
+
+        # Summary Table 
+
+        st.subheader("Lost Parcel Summary") 
+
+        summary_tbl = df.groupby(["Cluster", "Size Category"]).size().unstack(fill_value=0) # counts parcels by cluster AND size, makes a table
+        
+        summary_tbl["Total"] = summary_tbl.sum(axis=1) # adds a Total column at the end #
+        
+        st.dataframe(summary_tbl) # displays the table in the app
         
       # Interactive Heatmap --------------------------------------------
 
