@@ -50,6 +50,10 @@ CHART_SM = (6, 2)  # smaller chart for multi-station
 DSP_MAX = 20  # max characters for DSP names on charts before truncating
 LABEL_MAX = 25  # max characters for sort zone / location labels
 
+# Columns to show in parcel detail tables (Reason included)
+DETAIL_COLS = ["Tracking ID", "Cluster", "Aisle", "Sort Zone",
+               "DSP Name", "Size Category", "Shift", "Reason"]
+
 
 # =====================================================================
 # HELPER FUNCTIONS (reusable building blocks)
@@ -142,8 +146,16 @@ def trunc(labels, max_len=LABEL_MAX):
     return [str(l)[:max_len] + "..." if len(str(l)) > max_len else str(l) for l in labels]
 
 
+def get_detail_cols(df, extra=None):
+    """Get list of detail columns that exist in the dataframe."""
+    base = list(DETAIL_COLS)  # copy the constant
+    if extra:
+        base = extra + [c for c in base if c not in extra]  # put extras first
+    return [c for c in base if c in df.columns]  # only columns that exist
+
+
 def make_bar_horiz(data, title, color="steelblue", figsize_width=7, max_label=LABEL_MAX):
-    """Horizontal bar chart — used for ALL rankings/locations/DSPs. Labels never overlap."""
+    """Horizontal bar chart — used for ALL rankings/locations/DSPs/reasons. Labels never overlap."""
     h = max(2, len(data) * 0.3)  # auto-scale height: taller if more bars
     fig, ax = plt.subplots(figsize=(figsize_width, h))
     labs = trunc(data.index, max_label)  # truncate long labels
@@ -226,7 +238,7 @@ def render_shift_tab(df, total, dr):
     """Render the full Shift Rankings tab content."""
     # Instructions
     st.info("💡 **What's here:** See which shift loses the most parcels. "
-            "Expand a shift to see every lost parcel with its dispatch time, cluster, aisle, and DSP.")
+            "Expand a shift to see every lost parcel with its dispatch time, cluster, aisle, DSP, and **reason**.")
 
     # Show shift definitions so everyone knows the rules
     cols = st.columns(3)
@@ -259,7 +271,7 @@ def render_shift_tab(df, total, dr):
             else:
                 # Show columns that exist, sorted by DSP alphabetically
                 cols_show = [c for c in ["Tracking ID", "Dispatch Time", "Cluster",
-                             "Aisle", "Sort Zone", "DSP Name", "Size Category"] if c in df.columns]
+                             "Aisle", "Sort Zone", "DSP Name", "Size Category", "Reason"] if c in df.columns]
                 if "Dispatch Time" in cols_show:
                     shift_df["Dispatch Time"] = shift_df["Dispatch Time"].dt.strftime("%d/%m/%Y %H:%M")
                 out = shift_df[cols_show].sort_values("DSP Name").reset_index(drop=True)  # alphabetical by DSP
@@ -339,8 +351,8 @@ if mode == "Single Station":
             # TAB 1: SUMMARY
             # ==============================================================
             with t1:
-                st.info("💡 **What's here:** A high-level breakdown of lost parcels by **size** "
-                        "and **cluster**. Use this to quickly see the big picture before drilling down.")
+                st.info("💡 **What's here:** High-level breakdown by **size**, **cluster**, and "
+                        "**reason** (why each parcel was lost). See the big picture before drilling down.")
 
                 view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="sum_v")
 
@@ -356,6 +368,13 @@ if mode == "Single Station":
                     cc = df["Cluster"].dropna().value_counts()
                     if len(cc) > 0:
                         st.pyplot(make_bar_horiz(cc, f"Lost by Cluster ({dr})"))
+
+                    # Reason breakdown (horizontal — reason strings can be long)
+                    if "Reason" in df.columns:
+                        rc = df["Reason"].dropna().value_counts()
+                        if len(rc) > 0:
+                            st.pyplot(make_bar_horiz(rc, f"Lost by Reason ({dr})",
+                                                    color="firebrick"))
                 else:
                     # Size table
                     st.subheader("Size Breakdown")
@@ -366,6 +385,13 @@ if mode == "Single Station":
                     pivot = df.groupby(["Cluster", "Size Category"]).size().unstack(fill_value=0)
                     pivot["Total"] = pivot.sum(axis=1)  # add total column
                     st.dataframe(pivot)
+
+                    # Reason table
+                    if "Reason" in df.columns:
+                        st.subheader("Reason Breakdown")
+                        st.dataframe(make_table(df["Reason"].dropna().value_counts(),
+                                               "Reason", "Lost Parcels"),
+                                     use_container_width=True)
 
             # ==============================================================
             # TAB 2: LOST LOCATIONS (merged Location + Rankings)
@@ -414,10 +440,9 @@ if mode == "Single Station":
                         else:
                             st.dataframe(make_table(drill_data, drill_by, "Lost Parcels"))
 
-                    # Parcel detail table (grouped by DSP alphabetically)
+                    # Parcel detail table (grouped by DSP alphabetically, includes Reason)
                     with st.expander(f"📦 All parcels in Cluster {sel_cluster}"):
-                        show_cols = [c for c in ["Tracking ID", "Aisle", "Sort Zone",
-                                     "DSP Name", "Size Category", "Shift"] if c in df.columns]
+                        show_cols = get_detail_cols(filtered, extra=["Tracking ID", "Aisle", "Sort Zone"])
                         detail = filtered[show_cols].sort_values("DSP Name").reset_index(drop=True)
                         detail.index = range(1, len(detail) + 1)
                         st.dataframe(detail, use_container_width=True)
@@ -454,10 +479,9 @@ if mode == "Single Station":
                         st.subheader("Cycle")
                         st.dataframe(make_table(cycle_data, "Cycle", "Lost Parcels"))
 
-                # Expandable: full parcel list grouped by DSP
+                # Expandable: full parcel list grouped by DSP (includes Reason)
                 with st.expander("📦 All parcels grouped by DSP (alphabetical)"):
-                    show_cols = [c for c in ["Tracking ID", "DSP Name", "Cluster",
-                                 "Aisle", "Sort Zone", "Size Category", "Shift"] if c in df.columns]
+                    show_cols = get_detail_cols(df, extra=["Tracking ID", "DSP Name"])
                     all_by_dsp = df[show_cols].sort_values("DSP Name").reset_index(drop=True)
                     all_by_dsp.index = range(1, len(all_by_dsp) + 1)
                     st.dataframe(all_by_dsp, use_container_width=True)
@@ -501,15 +525,14 @@ if mode == "Single Station":
                 else:
                     st.dataframe(make_table(day_data, "Day", "Lost Parcels"))
 
-                # Expandable: parcels for a specific day
+                # Expandable: parcels for a specific day (includes Reason)
                 with st.expander("🔍 Parcel Details by Day"):
                     avail_days = [d for d in DAY_ORDER if d in df["Day of Week"].values]
                     if avail_days:
                         sel_day = st.selectbox("Select day:", avail_days, key="day_sel")
                         day_df = df[df["Day of Week"] == sel_day]
                         st.write(f"**{len(day_df)} parcels** on {sel_day}")
-                        show_cols = [c for c in ["Tracking ID", "Cluster", "Aisle",
-                                     "Sort Zone", "DSP Name", "Size Category", "Shift"] if c in df.columns]
+                        show_cols = get_detail_cols(day_df)
                         out = day_df[show_cols].sort_values("DSP Name").reset_index(drop=True)
                         out.index = range(1, len(out) + 1)
                         st.dataframe(out, use_container_width=True)
@@ -541,6 +564,8 @@ if mode == "Single Station":
                 cy_c = df["Assigned Cycle"].dropna().value_counts()
                 day_c = df["Day of Week"].dropna().value_counts()
                 sh_c = df[df["Shift"] != "Unknown"]["Shift"].value_counts()
+                # Reason counts
+                rs_c = df["Reason"].dropna().value_counts() if "Reason" in df.columns else pd.Series(dtype="int64")
 
                 # Extract worst values
                 wc = cl_c.index[0] if len(cl_c) > 0 else "N/A"
@@ -559,6 +584,8 @@ if mode == "Single Station":
                 wday_n = int(day_c.values[0]) if len(day_c) > 0 else 0
                 wsh = sh_c.index[0] if len(sh_c) > 0 else "N/A"
                 wsh_n = int(sh_c.values[0]) if len(sh_c) > 0 else 0
+                wr = rs_c.index[0] if len(rs_c) > 0 else "N/A"
+                wr_n = int(rs_c.values[0]) if len(rs_c) > 0 else 0
 
                 # Daily breakdown
                 df["Date"] = df["Last Updated Time"].dt.strftime("%d/%m")
@@ -582,6 +609,13 @@ if mode == "Single Station":
 
                 # Size breakdown
                 slines = "\n".join([f"  {s}: {n}" for s, n in sz_c.items()])
+
+                # Reason breakdown
+                if len(rs_c) > 0:
+                    rlines = "\n".join([f"  {r}: {n} ({round(int(n)/total*100,1)}%)"
+                                        for r, n in rs_c.head(5).items()])
+                else:
+                    rlines = "  (Not in export)"
 
                 # State breakdown (if column exists)
                 if "State" in df.columns:
@@ -623,6 +657,10 @@ if mode == "Single Station":
                 if len(sh_c) > 1 and wsh_n > total * 0.5:
                     ac(f"5-whys session for {wsh} shift — {wsh_n} losts ({round(wsh_n/total*100,1)}%).")
 
+                # Reason-based action
+                if len(rs_c) > 0 and wr_n > total * 0.3:
+                    ac(f"Process deep-dive on '{wr}' — {wr_n} parcels ({round(wr_n/total*100,1)}% of total).")
+
                 relo = sum(int(cy_c.get(c, 0)) for c in cy_c.index if "RELO" in str(c).upper())
                 if relo > total * 0.15:
                     ac(f"RELO process review — {relo} parcels lost during RELO.")
@@ -650,7 +688,10 @@ RC2) DSP:
 RC3) SIZE:
 {slines}
 
-RC4) STATUS:
+RC4) REASON:
+{rlines}
+
+RC5) STATUS:
 {stlines}
 
 ACTIONS:
@@ -663,14 +704,15 @@ ACTIONS:
                 st.subheader("🤖 Enhance with Quick")
                 prompt = (
                     f"Write a professional Lost Parcels bridge for DRM2 station. "
-                    f"Include RC1-RC4 root causes and AC1-AC4+ specific actions.\n\n"
+                    f"Include RC1-RC5 root causes and AC1-AC5+ specific actions.\n\n"
                     f"Data ({dr}): Total={total}, Worst Cluster={wc} ({wc_n}, {wc_p}%), "
                     f"Worst Aisle={wa} ({wa_n}), Worst DSP={wd} ({wd_n}, {dm}x avg), "
                     f"Worst Size={ws} ({ws_n}), Worst Day={wday} ({wday_n}), "
-                    f"Worst Shift={wsh} ({wsh_n})\n\n"
-                    f"Daily: {dl}\nShifts: {sl}\nClusters:\n{cdet}DSPs:\n{dlines}\n\n"
+                    f"Worst Shift={wsh} ({wsh_n}), Top Reason={wr} ({wr_n})\n\n"
+                    f"Daily: {dl}\nShifts: {sl}\nClusters:\n{cdet}DSPs:\n{dlines}\n"
+                    f"Reasons:\n{rlines}\n\n"
                     f"Generate specific, actionable recommendations referencing exact clusters, "
-                    f"aisles, DSPs, sizes, days, and shifts."
+                    f"aisles, DSPs, sizes, days, shifts, and loss reasons."
                 )
                 st.code(prompt, language="text")  # code block has built-in copy icon
                 st.caption("📋 Click the copy icon → open Quick → paste → get AI-enhanced bridge")
@@ -736,7 +778,8 @@ else:
 
         # TAB 1: SUMMARY
         with t1:
-            st.info("💡 **What's here:** Compare total lost parcels and size breakdowns across all stations.")
+            st.info("💡 **What's here:** Compare total lost parcels, size breakdowns, and "
+                    "**loss reasons** across all stations.")
             view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="mc_sum_v")
 
             if view == "Chart":
@@ -771,11 +814,37 @@ else:
                 ax2.tick_params(labelsize=7)
                 plt.tight_layout()
                 st.pyplot(fig2)
+
+                # Reason comparison per station
+                has_reason = any("Reason" in stations[n].columns for n in names)
+                if has_reason:
+                    st.markdown("---")
+                    st.subheader("❓ Loss Reasons by Station")
+                    for i, n in enumerate(names):
+                        if "Reason" in stations[n].columns:
+                            rc = stations[n]["Reason"].dropna().value_counts().head(5)
+                            if len(rc) > 0:
+                                st.pyplot(make_bar_horiz(rc,
+                                                        f"{n} — Top Reasons",
+                                                        color=STATION_COLORS[i],
+                                                        figsize_width=6))
             else:
                 st.dataframe(pd.DataFrame({
                     "Station": names,
                     "Total Lost": [len(stations[n]) for n in names]
                 }, index=range(1, len(names)+1)))
+
+                # Reason table per station
+                has_reason = any("Reason" in stations[n].columns for n in names)
+                if has_reason:
+                    st.subheader("❓ Loss Reasons")
+                    for n in names:
+                        if "Reason" in stations[n].columns:
+                            rc = stations[n]["Reason"].dropna().value_counts()
+                            if len(rc) > 0:
+                                with st.expander(f"{n} — Reasons"):
+                                    st.dataframe(make_table(rc, "Reason", "Lost Parcels"),
+                                                 use_container_width=True)
 
         # TAB 2: LOST LOCATIONS
         with t2:
@@ -909,18 +978,20 @@ else:
             st.info("💡 **What's here:** Comparison table + Quick prompt for a cross-station bridge. "
                     "See which station is worst and what it can learn from the best.")
 
-            # Comparison table
+            # Comparison table (now includes top reason)
             comp = []
             for n in names:
                 sdf = stations[n]
                 sk = sdf[sdf["Shift"] != "Unknown"]["Shift"]
+                top_reason = safe_top(sdf["Reason"]) if "Reason" in sdf.columns else "N/A"
                 comp.append({
                     "Station": n,
                     "Total Lost": len(sdf),
                     "Worst Cluster": safe_top(sdf["Cluster"]),
                     "Worst Aisle": safe_top(sdf["Aisle"]),
                     "Worst DSP": safe_top(sdf["DSP Name"]),
-                    "Worst Shift": safe_top(sk) if len(sk) > 0 else "N/A"
+                    "Worst Shift": safe_top(sk) if len(sk) > 0 else "N/A",
+                    "Top Reason": top_reason
                 })
             st.dataframe(pd.DataFrame(comp, index=range(1, len(comp)+1)),
                          use_container_width=True)
@@ -932,14 +1003,16 @@ else:
             st.write(f"**Best:** {best} ({len(stations[best])}) | "
                      f"**Worst:** {worst} ({len(stations[worst])}) | **Gap:** {gap}")
 
-            # Quick prompt
+            # Quick prompt (includes reasons)
             summ = "\n".join([
                 f"- {n}: {len(stations[n])} losts, worst cluster={safe_top(stations[n]['Cluster'])}, "
-                f"worst DSP={safe_top(stations[n]['DSP Name'])}"
+                f"worst DSP={safe_top(stations[n]['DSP Name'])}, "
+                f"top reason={safe_top(stations[n]['Reason']) if 'Reason' in stations[n].columns else 'N/A'}"
                 for n in names
             ])
             st.code(f"Compare these stations and recommend what {worst} can learn from {best}:\n{summ}\n"
-                    f"Best={best} ({len(stations[best])}), Worst={worst} ({len(stations[worst])}), Gap={gap}",
+                    f"Best={best} ({len(stations[best])}), Worst={worst} ({len(stations[worst])}), Gap={gap}\n"
+                    f"Include analysis of loss reasons and recommend targeted process improvements.",
                     language="text")
             st.caption("📋 Click the copy icon → open Quick → paste → get AI comparison")
 
