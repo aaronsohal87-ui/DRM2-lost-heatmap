@@ -1,26 +1,21 @@
-```python
-import streamlit as st  # Streamlit — the framework that builds this web app
-import pandas as pd  # Pandas — reads CSV files and lets us work with tables (dataframes)
-import matplotlib.pyplot as plt  # Matplotlib — creates all the charts and graphs
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
 
-# --- PAGE SETUP ---
-st.set_page_config(page_title="DRM2 Lost Heatmap", page_icon="📦", layout="wide")  # wide layout, tab title, icon
-st.title("📦 DRM2 Lost Parcel Heatmap")  # main page title
-st.markdown("---")  # horizontal divider line
+st.set_page_config(page_title="DRM2 Lost Heatmap", page_icon="📦", layout="wide")
+st.title("📦 DRM2 Lost Parcel Heatmap")
+st.markdown("---")
 
-# --- CONSTANTS (edit these to change behaviour globally) ---
-STATION_COLORS = ["steelblue", "orange", "green", "red", "purple"]  # colours for multi-station charts
-SIZE_ORDER = ["Small", "Medium", "Small Oversize", "Large Oversize", "Unknown"]  # size tier order
-DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]  # weekday order
-SHIFT_ORDER = ["NS", "AM", "PM"]  # shift order for charts/tables
-SHIFT_COLORS = {"NS": "midnightblue", "AM": "darkorange", "PM": "darkgreen"}  # one colour per shift
-# Shift time windows (displayed so everyone knows the rules)
+STATION_COLORS = ["steelblue", "orange", "green", "red", "purple"]
+SIZE_ORDER = ["Small", "Medium", "Small Oversize", "Large Oversize", "Unknown"]
+DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+SHIFT_ORDER = ["NS", "AM", "PM"]
+SHIFT_COLORS = {"NS": "midnightblue", "AM": "darkorange", "PM": "darkgreen"}
 SHIFT_DEFINITIONS = {
     "NS": "00:00 – 08:59 (Night Sort — stow)",
     "AM": "09:00 – 13:59 (Pick, stage, dispatch)",
     "PM": "14:00 – 23:59 (Dispatch, RELO)"
 }
-# Maps each hour (0-23) to a shift
 SHIFT_HOUR_MAP = {
     0: "NS", 1: "NS", 2: "NS", 3: "NS", 4: "NS",
     5: "NS", 6: "NS", 7: "NS", 8: "NS",
@@ -28,46 +23,38 @@ SHIFT_HOUR_MAP = {
     14: "PM", 15: "PM", 16: "PM", 17: "PM", 18: "PM",
     19: "PM", 20: "PM", 21: "PM", 22: "PM", 23: "PM"
 }
-# Columns that contain personal data — removed on upload for GDPR
 SENSITIVE_COLS = [
     "Last Scan By", "Driver Id", "Holder Name", "City", "Postal",
     "Province", "Ordering Order ID", "Order Amount", "Receivable Amount",
     "Payment Method", "District", "Scheduled Delivery End Time"
 ]
-# Columns the app needs to work properly
 REQUIRED_COLS = [
     "Tracking ID", "Sort Zone", "Aisle", "Cluster",
     "Package Length", "Package Width", "Package Height",
     "DSP Name", "Assigned Cycle", "Last Updated Time"
 ]
-# Chart dimensions (width, height in inches) — kept small so page isn't cluttered
-CHART = (7, 2.5)  # standard chart
-CHART_SM = (6, 2)  # smaller chart for multi-station
-DSP_MAX = 20  # max characters for DSP names on charts before truncating
-LABEL_MAX = 25  # max characters for sort zone / location labels
-# Columns to show in parcel detail tables (Reason included)
+CHART = (7, 2.5)
+CHART_SM = (6, 2)
+DSP_MAX = 20
+LABEL_MAX = 25
 DETAIL_COLS = ["Tracking ID", "Cluster", "Aisle", "Sort Zone",
                "DSP Name", "Size Category", "Shift", "Reason"]
 
-# =====================================================================
-# HELPER FUNCTIONS (reusable building blocks)
-# =====================================================================
 
 def get_size(val):
-    """Classify a parcel by its longest side (cm) into Amazon UK size tiers."""
     if pd.isna(val): return "Unknown"
     if val <= 35: return "Small"
     if val <= 45: return "Medium"
     if val <= 61: return "Small Oversize"
     return "Large Oversize"
 
+
 def classify_shift(hour):
-    """Turn an hour (0-23) into a shift name. NaN → Unknown."""
     if pd.isna(hour): return "Unknown"
     return SHIFT_HOUR_MAP.get(int(hour), "Unknown")
 
+
 def clean_data(df):
-    """Master cleaning function — runs everything needed on a raw SCC export."""
     df = df.drop(columns=[c for c in SENSITIVE_COLS if c in df.columns])
     for col in ["Package Length", "Package Width", "Package Height"]:
         if col in df.columns:
@@ -98,14 +85,14 @@ def clean_data(df):
         df["Shift"] = "Unknown"
     return df
 
+
 def get_station_name(df, filename):
-    """Get station name from the Station column, or fall back to filename."""
     if "Station" in df.columns and len(df["Station"].dropna()) > 0:
         return df["Station"].dropna().iloc[0]
     return filename.replace(".csv", "").replace("_", " ").strip()[:20]
 
+
 def get_date_range(df):
-    """Return formatted date range string."""
     if "Last Updated Time" not in df.columns: return ""
     valid = df["Last Updated Time"].dropna()
     if len(valid) == 0: return ""
@@ -113,24 +100,24 @@ def get_date_range(df):
     e = valid.max().strftime("%d %b %Y")
     return s if s == e else f"{s} – {e}"
 
+
 def safe_top(series):
-    """Safely get the most common value in a series."""
     c = series.dropna().value_counts()
     return c.index[0] if len(c) > 0 else "N/A"
 
+
 def trunc(labels, max_len=LABEL_MAX):
-    """Shorten labels for charts so they don't overlap."""
     return [str(l)[:max_len] + "..." if len(str(l)) > max_len else str(l) for l in labels]
 
+
 def get_detail_cols(df, extra=None):
-    """Get list of detail columns that exist in the dataframe."""
     base = list(DETAIL_COLS)
     if extra:
         base = extra + [c for c in base if c not in extra]
     return [c for c in base if c in df.columns]
 
+
 def make_bar_horiz(data, title, color="steelblue", figsize_width=7, max_label=LABEL_MAX):
-    """Horizontal bar chart — used for ALL rankings/locations/DSPs/reasons."""
     h = max(2, len(data) * 0.3)
     fig, ax = plt.subplots(figsize=(figsize_width, h))
     labs = trunc(data.index, max_label)
@@ -144,8 +131,8 @@ def make_bar_horiz(data, title, color="steelblue", figsize_width=7, max_label=LA
     plt.tight_layout()
     return fig
 
+
 def make_bar_vert(data, xl, yl, title, color="steelblue", figsize=CHART):
-    """Vertical bar chart — used for Size, Cluster (short labels only)."""
     fig, ax = plt.subplots(figsize=figsize)
     labs = trunc(data.index, LABEL_MAX)
     ax.bar(labs, data.values, color=color)
@@ -159,8 +146,8 @@ def make_bar_vert(data, xl, yl, title, color="steelblue", figsize=CHART):
     plt.tight_layout()
     return fig
 
+
 def make_bar_shift(data, title):
-    """Shift chart — always shows all 3 shifts (NS, AM, PM) even if 0."""
     data = data.reindex(SHIFT_ORDER, fill_value=0)
     fig, ax = plt.subplots(figsize=CHART)
     bars = ax.bar(SHIFT_ORDER, [data[s] for s in SHIFT_ORDER],
@@ -176,15 +163,15 @@ def make_bar_shift(data, title):
     plt.tight_layout()
     return fig
 
+
 def make_table(series, c1, c2):
-    """Turn a value_counts series into a numbered display table."""
     t = series.reset_index()
     t.columns = [c1, c2]
     t.index = range(1, len(t) + 1)
     return t
 
+
 def shift_leaderboard(df, total):
-    """Build shift leaderboard — always shows all 3 shifts, sorted worst first."""
     counts = df[df["Shift"] != "Unknown"]["Shift"].value_counts()
     rows = []
     for s in SHIFT_ORDER:
@@ -196,8 +183,8 @@ def shift_leaderboard(df, total):
     t.index = range(1, len(t) + 1)
     return t
 
+
 def render_shift_tab(df, total, dr, key_prefix=""):
-    """Render the full Shift Rankings tab content."""
     st.info("💡 **What's here:** See which shift loses the most parcels. "
             "Expand a shift to see every lost parcel with its dispatch time, cluster, aisle, DSP, and **reason**.")
     cols = st.columns(3)
@@ -254,7 +241,6 @@ def render_shift_tab(df, total, dr, key_prefix=""):
                 out = shift_df[cols_show].sort_values("DSP Name").reset_index(drop=True)
                 out.index = range(1, len(out) + 1)
                 st.dataframe(out, use_container_width=True)
-    # Show Unknown parcels (no Dispatch Time) if any exist
     unk_df = df[df["Shift"] == "Unknown"]
     if len(unk_df) > 0:
         with st.expander(f"**Unknown** — {len(unk_df)} parcels (no Dispatch Time)"):
@@ -263,17 +249,13 @@ def render_shift_tab(df, total, dr, key_prefix=""):
             out = unk_df[cols_show].sort_values("DSP Name").reset_index(drop=True)
             out.index = range(1, len(out) + 1)
             st.dataframe(out, use_container_width=True)
-    # Warning if some parcels couldn't be assigned
     unk = len(df[df["Shift"] == "Unknown"])
     if unk > 0:
         st.warning(f"⚠️ {unk} parcels couldn't be assigned to a shift (no Dispatch Time). Excluded from chart above.")
 
-# =====================================================================
-# MODE TOGGLE (top of page — single vs multi station)
-# =====================================================================
+
 mode = st.radio("Mode:", ["Single Station", "Multi-Station Compare"], horizontal=True, key="mode")
 
-# --- HOW TO GET YOUR DATA (always available, collapsed by default) ---
 with st.expander("📖 How to get your data (click if you need help)"):
     st.markdown("""
 **Step 1 — Get Tracker IDs from PerfectMile:**
@@ -296,9 +278,6 @@ with st.expander("📖 How to get your data (click if you need help)"):
 **Optional columns (recommended):** Reason, Dispatch Time, State
     """)
 
-# =====================================================================
-# SINGLE STATION MODE
-# =====================================================================
 if mode == "Single Station":
     uploaded_file = st.file_uploader("Upload your SCC export (.csv)", type="csv")
     if uploaded_file is not None:
@@ -329,12 +308,11 @@ if mode == "Single Station":
                 for i, (cl, n) in enumerate(cl_r.head(3).items()):
                     pct = round(n / len(df) * 100, 1)
                     parts.append(f"#{i+1} Cluster {cl} — {n} parcels ({pct}%)")
-                st.info(f"🎯 **Cluster Priority (highest losts first):** " + " → ".join(parts))
+                st.info("🎯 **Cluster Priority (highest losts first):** " + " → ".join(parts))
             t1, t2, t3, t4, t5, t6, t7 = st.tabs([
                 "📊 Summary", "📍 Lost Locations", "🚚 DSP",
                 "⏱️ Shift Rankings", "📅 Day of Week", "💾 Export", "📋 Bridge"
             ])
-            # TAB 1: SUMMARY
             with t1:
                 st.info("💡 **What's here:** High-level breakdown by **size**, **cluster**, and "
                         "**reason** (why each parcel was lost).")
@@ -361,7 +339,6 @@ if mode == "Single Station":
                     if "Reason" in df.columns:
                         st.subheader("Reason Breakdown")
                         st.dataframe(make_table(df["Reason"].dropna().value_counts(), "Reason", "Lost Parcels"), use_container_width=True)
-            # TAB 2: LOST LOCATIONS
             with t2:
                 st.info("💡 **What's here:** Find exactly **where** parcels are being lost. "
                         "Choose a category to see the **Top 10 worst** locations, then drill into a cluster.")
@@ -395,7 +372,6 @@ if mode == "Single Station":
                         detail = filtered[show_cols].sort_values("DSP Name").reset_index(drop=True)
                         detail.index = range(1, len(detail) + 1)
                         st.dataframe(detail, use_container_width=True)
-            # TAB 3: DSP
             with t3:
                 st.info("💡 **What's here:** See which DSPs are losing the most parcels. "
                         "Chart = worst-first. Table = alphabetical.")
@@ -420,10 +396,8 @@ if mode == "Single Station":
                     all_by_dsp = df[show_cols].sort_values("DSP Name").reset_index(drop=True)
                     all_by_dsp.index = range(1, len(all_by_dsp) + 1)
                     st.dataframe(all_by_dsp, use_container_width=True)
-            # TAB 4: SHIFT RANKINGS
             with t4:
                 render_shift_tab(df, len(df), dr)
-            # TAB 5: DAY OF WEEK
             with t5:
                 st.info("💡 **What's here:** See which **days of the week** have the most lost parcels.")
                 day_data = df["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
@@ -453,12 +427,10 @@ if mode == "Single Station":
                         out = day_df[show_cols].sort_values("DSP Name").reset_index(drop=True)
                         out.index = range(1, len(out) + 1)
                         st.dataframe(out, use_container_width=True)
-            # TAB 6: EXPORT
             with t6:
                 st.info("💡 **What's here:** Download the cleaned dataset as a CSV.")
                 st.download_button("⬇️ Download Cleaned CSV", df.to_csv(index=False),
                                    "Lost_Parcels_Cleaned.csv", "text/csv")
-            # TAB 7: BRIDGE
             with t7:
                 st.info("💡 **What's here:** An auto-generated lost parcels bridge with root causes and actions.")
                 total = len(df)
@@ -577,9 +549,6 @@ ACTIONS:
                 st.code(prompt, language="text")
                 st.caption("📋 Click the copy icon → open Quick → paste → get AI-enhanced bridge")
 
-# =====================================================================
-# MULTI-STATION COMPARE MODE
-# =====================================================================
 else:
     st.subheader("Upload Station Data")
     st.caption("Upload one SCC export per station (2–5 stations).")
@@ -784,4 +753,3 @@ else:
         st.warning("⚠️ Upload at least 2 station files to compare.")
     else:
         st.info("👆 Upload your CSV files above to get started.")
-```
