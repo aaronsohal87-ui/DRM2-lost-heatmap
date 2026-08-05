@@ -55,7 +55,6 @@ LABEL_MAX = 25  # max characters for sort zone / location labels
 DETAIL_COLS = ["Tracking ID", "Cluster", "Aisle", "Sort Zone",
                "DSP Name", "Size Category", "Shift", "Reason"]
 
-
 # =====================================================================
 # HELPER FUNCTIONS (reusable building blocks)
 # =====================================================================
@@ -68,12 +67,10 @@ def get_size(val):
     if val <= 61: return "Small Oversize"  # 46-61cm
     return "Large Oversize"  # 62cm+
 
-
 def classify_shift(hour):
     """Turn an hour (0-23) into a shift name. NaN → Unknown."""
     if pd.isna(hour): return "Unknown"  # no hour available
     return SHIFT_HOUR_MAP.get(int(hour), "Unknown")  # look up in the map
-
 
 def clean_data(df):
     """Master cleaning function — runs everything needed on a raw SCC export."""
@@ -118,13 +115,11 @@ def clean_data(df):
 
     return df
 
-
 def get_station_name(df, filename):
     """Get station name from the Station column, or fall back to filename."""
     if "Station" in df.columns and len(df["Station"].dropna()) > 0:
         return df["Station"].dropna().iloc[0]  # first non-empty station value
     return filename.replace(".csv", "").replace("_", " ").strip()[:20]  # clean up filename
-
 
 def get_date_range(df):
     """Return formatted date range string like '01 Jul 2026' or '01 Jul – 07 Jul 2026'."""
@@ -135,17 +130,14 @@ def get_date_range(df):
     e = valid.max().strftime("%d %b %Y")  # end date
     return s if s == e else f"{s} – {e}"  # single day or range
 
-
 def safe_top(series):
     """Safely get the most common value in a series. Returns 'N/A' if empty."""
     c = series.dropna().value_counts()
     return c.index[0] if len(c) > 0 else "N/A"
 
-
 def trunc(labels, max_len=LABEL_MAX):
     """Shorten labels for charts so they don't overlap. Adds '...' if cut."""
     return [str(l)[:max_len] + "..." if len(str(l)) > max_len else str(l) for l in labels]
-
 
 def get_detail_cols(df, extra=None):
     """Get list of detail columns that exist in the dataframe."""
@@ -153,7 +145,6 @@ def get_detail_cols(df, extra=None):
     if extra:
         base = extra + [c for c in base if c not in extra]  # put extras first
     return [c for c in base if c in df.columns]  # only columns that exist
-
 
 def make_bar_horiz(data, title, color="steelblue", figsize_width=7, max_label=LABEL_MAX):
     """Horizontal bar chart — used for ALL rankings/locations/DSPs/reasons. Labels never overlap."""
@@ -171,7 +162,6 @@ def make_bar_horiz(data, title, color="steelblue", figsize_width=7, max_label=LA
     plt.tight_layout()
     return fig
 
-
 def make_bar_vert(data, xl, yl, title, color="steelblue", figsize=CHART):
     """Vertical bar chart — used for Size, Cluster (short labels only)."""
     fig, ax = plt.subplots(figsize=figsize)
@@ -187,7 +177,6 @@ def make_bar_vert(data, xl, yl, title, color="steelblue", figsize=CHART):
     plt.xticks(rotation=0, ha="center")
     plt.tight_layout()
     return fig
-
 
 def make_bar_shift(data, title):
     """Shift chart — always shows all 3 shifts (NS, AM, PM) even if 0."""
@@ -207,14 +196,12 @@ def make_bar_shift(data, title):
     plt.tight_layout()
     return fig
 
-
 def make_table(series, c1, c2):
     """Turn a value_counts series into a numbered display table."""
     t = series.reset_index()  # convert to dataframe
     t.columns = [c1, c2]  # rename columns
     t.index = range(1, len(t) + 1)  # number rows from 1
     return t
-
 
 def shift_leaderboard(df, total):
     """Build shift leaderboard — always shows all 3 shifts, sorted worst first."""
@@ -233,7 +220,6 @@ def shift_leaderboard(df, total):
     t = pd.DataFrame(rows)
     t.index = range(1, len(t) + 1)  # number from 1
     return t
-
 
 def render_shift_tab(df, total, dr, key_prefix=""):
     """Render the full Shift Rankings tab content."""
@@ -313,7 +299,6 @@ def render_shift_tab(df, total, dr, key_prefix=""):
     if unk > 0:
         st.warning(f"⚠️ {unk} parcels couldn't be assigned to a shift (no Dispatch Time). Excluded above.")
 
-
 # =====================================================================
 # MODE TOGGLE (top of page — single vs multi station)
 # =====================================================================
@@ -341,7 +326,6 @@ with st.expander("📖 How to get your data (click if you need help)"):
 
     **Optional columns (recommended):** Reason, Dispatch Time, State
     """)
-
 
 # =====================================================================
 # SINGLE STATION MODE
@@ -769,7 +753,6 @@ ACTIONS:
                 )
                 st.code(prompt, language="text")  # code block has built-in copy icon
                 st.caption("📋 Click the copy icon → open Quick → paste → get AI-enhanced bridge")
-
 
 # =====================================================================
 # MULTI-STATION COMPARE MODE
