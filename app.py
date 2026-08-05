@@ -48,6 +48,7 @@ REQUIRED_COLS = [
 CHART = (7, 2.5)  # standard chart
 CHART_SM = (6, 2)  # smaller chart for multi-station
 DSP_MAX = 20  # max characters for DSP names on charts before truncating
+LABEL_MAX = 25  # max characters for sort zone / location labels
 
 
 # =====================================================================
@@ -136,47 +137,41 @@ def safe_top(series):
     return c.index[0] if len(c) > 0 else "N/A"
 
 
-def trunc(labels):
+def trunc(labels, max_len=LABEL_MAX):
     """Shorten labels for charts so they don't overlap. Adds '...' if cut."""
-    return [str(l)[:DSP_MAX] + "..." if len(str(l)) > DSP_MAX else str(l) for l in labels]
+    return [str(l)[:max_len] + "..." if len(str(l)) > max_len else str(l) for l in labels]
 
 
-def make_bar(data, xl, yl, title, color="steelblue", horiz=False, figsize=CHART):
-    """Create a bar chart. Can be horizontal (for rankings) or vertical."""
-    fig, ax = plt.subplots(figsize=figsize)  # create figure at specified size
-    labs = trunc(data.index)  # truncate long labels
-    if horiz:
-        ax.barh(labs, data.values, color=color)  # horizontal bars
-        ax.invert_yaxis()  # biggest at top
-        # Add values on bars
-        for i, v in enumerate(data.values):
-            ax.text(v + 0.2, i, str(int(v)), va="center", fontsize=7)  # number at end of bar
-    else:
-        ax.bar(labs, data.values, color=color)  # vertical bars
-        # Add values above bars
-        for i, v in enumerate(data.values):
-            ax.text(i, v + 0.2, str(int(v)), ha="center", fontsize=7)  # number above bar
-    ax.set_xlabel(xl, fontsize=8)  # x-axis label
-    ax.set_ylabel(yl, fontsize=8)  # y-axis label
-    ax.set_title(title, fontsize=9)  # chart title
-    ax.tick_params(labelsize=7)  # smaller tick labels
-    plt.xticks(rotation=0, ha="center")  # keep labels horizontal
-    plt.tight_layout()  # prevent clipping
-    return fig
-
-
-def make_bar_dsp(data, title, color="orange"):
-    """Horizontal bar chart specifically for DSPs — auto-scales height for long lists."""
-    h = max(2, len(data) * 0.3)  # taller if more DSPs
-    fig, ax = plt.subplots(figsize=(CHART[0], h))
-    ax.barh(trunc(data.index), data.values, color=color)  # horizontal bars
-    ax.invert_yaxis()  # worst at top
-    # Add values on bars
+def make_bar_horiz(data, title, color="steelblue", figsize_width=7, max_label=LABEL_MAX):
+    """Horizontal bar chart — used for ALL rankings/locations/DSPs. Labels never overlap."""
+    h = max(2, len(data) * 0.3)  # auto-scale height: taller if more bars
+    fig, ax = plt.subplots(figsize=(figsize_width, h))
+    labs = trunc(data.index, max_label)  # truncate long labels
+    ax.barh(labs, data.values, color=color)  # horizontal bars
+    ax.invert_yaxis()  # biggest value at top
+    # Add values at end of each bar
     for i, v in enumerate(data.values):
         ax.text(v + 0.2, i, str(int(v)), va="center", fontsize=7)
     ax.set_xlabel("Lost Parcels", fontsize=8)
     ax.set_title(title, fontsize=9)
     ax.tick_params(labelsize=7)
+    plt.tight_layout()
+    return fig
+
+
+def make_bar_vert(data, xl, yl, title, color="steelblue", figsize=CHART):
+    """Vertical bar chart — used for Size, Cluster (short labels only)."""
+    fig, ax = plt.subplots(figsize=figsize)
+    labs = trunc(data.index, LABEL_MAX)
+    ax.bar(labs, data.values, color=color)  # vertical bars
+    # Add values above each bar
+    for i, v in enumerate(data.values):
+        ax.text(i, v + 0.2, str(int(v)), ha="center", fontsize=7)
+    ax.set_xlabel(xl, fontsize=8)
+    ax.set_ylabel(yl, fontsize=8)
+    ax.set_title(title, fontsize=9)
+    ax.tick_params(labelsize=7)
+    plt.xticks(rotation=0, ha="center")
     plt.tight_layout()
     return fig
 
@@ -350,18 +345,17 @@ if mode == "Single Station":
                 view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="sum_v")
 
                 if view == "Chart":
-                    # Size breakdown chart
+                    # Size breakdown chart (vertical — labels are short)
                     sc = df["Size Category"].value_counts()
                     if len(sc) > 0:
                         colors = ["green", "orange", "red", "darkred", "grey"][:len(sc)]
-                        st.pyplot(make_bar(sc, "Size", "Lost Parcels",
-                                           f"Lost by Size ({dr})", color=colors))
+                        st.pyplot(make_bar_vert(sc, "Size", "Lost Parcels",
+                                               f"Lost by Size ({dr})", color=colors))
 
-                    # Cluster breakdown chart
+                    # Cluster breakdown (horizontal — handles any number of clusters)
                     cc = df["Cluster"].dropna().value_counts()
                     if len(cc) > 0:
-                        st.pyplot(make_bar(cc, "Cluster", "Lost Parcels",
-                                           f"Lost by Cluster ({dr})"))
+                        st.pyplot(make_bar_horiz(cc, f"Lost by Cluster ({dr})"))
                 else:
                     # Size table
                     st.subheader("Size Breakdown")
@@ -389,9 +383,10 @@ if mode == "Single Station":
                 rank_data = df[rank_by].dropna().value_counts().head(10)  # top 10 worst
                 if len(rank_data) > 0:
                     if rank_view == "Chart":
-                        st.pyplot(make_bar(rank_data, "Lost Parcels", rank_by,
-                                           f"Top 10 {rank_by}s ({dr})",
-                                           color="darkred", horiz=True))
+                        # Always horizontal — prevents Sort Zone labels from overlapping
+                        st.pyplot(make_bar_horiz(rank_data,
+                                                f"Top 10 {rank_by}s ({dr})",
+                                                color="darkred"))
                     else:
                         st.dataframe(make_table(rank_data, rank_by, "Lost Parcels"))
 
@@ -412,9 +407,10 @@ if mode == "Single Station":
                     drill_data = filtered[drill_by].dropna().value_counts()
                     if len(drill_data) > 0:
                         if drill_view == "Chart":
-                            st.pyplot(make_bar(drill_data, drill_by, "Lost Parcels",
-                                               f"Cluster {sel_cluster} — {drill_by}s",
-                                               color="steelblue"))
+                            # Horizontal bars — Sort Zones can be long, this prevents overlap
+                            st.pyplot(make_bar_horiz(drill_data,
+                                                    f"Cluster {sel_cluster} — {drill_by}s",
+                                                    color="steelblue"))
                         else:
                             st.dataframe(make_table(drill_data, drill_by, "Lost Parcels"))
 
@@ -440,10 +436,12 @@ if mode == "Single Station":
 
                 if dsp_view == "Chart":
                     if len(dsp_data) > 0:
-                        st.pyplot(make_bar_dsp(dsp_data, f"Lost by DSP ({dr})"))
+                        # Horizontal bars — DSP names are long
+                        st.pyplot(make_bar_horiz(dsp_data, f"Lost by DSP ({dr})",
+                                                color="orange", max_label=DSP_MAX))
                     if len(cycle_data) > 0:
-                        st.pyplot(make_bar(cycle_data, "Cycle", "Lost Parcels",
-                                           f"Lost by Cycle ({dr})", color="purple"))
+                        st.pyplot(make_bar_horiz(cycle_data, f"Lost by Cycle ({dr})",
+                                                color="purple"))
                 else:
                     if len(dsp_data) > 0:
                         st.subheader("DSP (A–Z)")
@@ -742,7 +740,7 @@ else:
             view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="mc_sum_v")
 
             if view == "Chart":
-                # Total comparison bar chart
+                # Total comparison bar chart (vertical — station names are short)
                 fig, ax = plt.subplots(figsize=CHART)
                 bars = ax.bar(names, [len(stations[n]) for n in names],
                               color=STATION_COLORS[:len(names)])
@@ -791,9 +789,11 @@ else:
                 d = stations[n][rank_by].dropna().value_counts().head(10)
                 if len(d) > 0:
                     if rank_view == "Chart":
-                        st.pyplot(make_bar(d, "Lost Parcels", rank_by,
-                                           f"{n} — Top 10 {rank_by}s",
-                                           color=STATION_COLORS[i], horiz=True, figsize=CHART_SM))
+                        # Horizontal bars — no overlap regardless of label length
+                        st.pyplot(make_bar_horiz(d,
+                                                f"{n} — Top 10 {rank_by}s",
+                                                color=STATION_COLORS[i],
+                                                figsize_width=6))
                     else:
                         st.subheader(n)
                         st.dataframe(make_table(d, rank_by, "Lost Parcels"))
@@ -810,9 +810,10 @@ else:
                         st.write(f"**{len(flt)} parcels** in Cluster {sel}")
                         ai = flt["Aisle"].dropna().value_counts().head(10)
                         if len(ai) > 0:
-                            st.pyplot(make_bar(ai, "Aisle", "Lost Parcels",
-                                               f"{n} — Cluster {sel} Aisles",
-                                               color=STATION_COLORS[i], figsize=CHART_SM))
+                            st.pyplot(make_bar_horiz(ai,
+                                                    f"{n} — Cluster {sel} Aisles",
+                                                    color=STATION_COLORS[i],
+                                                    figsize_width=6))
 
         # TAB 3: DSP
         with t3:
@@ -824,7 +825,8 @@ else:
                 for i, n in enumerate(names):
                     dsp = stations[n]["DSP Name"].dropna().value_counts().head(10)
                     if len(dsp) > 0:
-                        st.pyplot(make_bar_dsp(dsp, f"{n} — Worst DSPs", color=STATION_COLORS[i]))
+                        st.pyplot(make_bar_horiz(dsp, f"{n} — Worst DSPs",
+                                                color=STATION_COLORS[i], max_label=DSP_MAX))
             else:
                 for i, n in enumerate(names):
                     with st.expander(f"🚚 {n} — DSP List (A–Z)", expanded=False):
