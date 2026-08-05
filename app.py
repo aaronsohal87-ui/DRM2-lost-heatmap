@@ -265,17 +265,15 @@ with st.expander("📖 How to get your data (click if you need help)"):
 
 **Step 2 — Export from SCC:**
 1. Open [SCC](https://logistics.amazon.co.uk/station/dashboard/outboundAMZL)
-2. Paste Tracker IDs into the search
-3. Apply any filters you need (zone, aisle, cluster, DSP, cycle)
+2. Paste Tracker IDs into SCC search
+3. Click View Options and Select all
 4. Click **Export → CSV**
 
 **Step 3 — Upload:**
 - Single Station → upload one CSV below
 - Multi-Station Compare → upload one CSV per station
 
-**Required columns:** Tracking ID, Sort Zone, Aisle, Cluster, Package Length/Width/Height, DSP Name, Assigned Cycle, Last Updated Time
 
-**Optional columns (recommended):** Reason, Dispatch Time, State
     """)
 
 if mode == "Single Station":
