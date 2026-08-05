@@ -87,8 +87,8 @@ def safe_top(series, n=1):
     return counts.index[0] if n == 1 else counts.head(n)  # top 1 or top N
 
 
-def plot_bar(data, xlabel, ylabel, title, color="steelblue", horizontal=False, rotate=0, figsize=(12, 5)):
-    """Reusable bar chart function — avoids repeating matplotlib boilerplate"""
+def plot_bar(data, xlabel, ylabel, title, color="steelblue", horizontal=False, figsize=(9, 3.5)):
+    """Reusable bar chart function — smaller sizing, no rotated labels"""
     fig, ax = plt.subplots(figsize=figsize)
     if horizontal:
         ax.barh(data.index, data.values, color=color)  # horizontal bars
@@ -98,7 +98,7 @@ def plot_bar(data, xlabel, ylabel, title, color="steelblue", horizontal=False, r
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    plt.xticks(rotation=rotate, ha="right" if rotate else "center")  # rotate labels if needed
+    plt.xticks(rotation=0, ha="center")  # always horizontal labels
     plt.tight_layout()  # prevent label cutoff
     return fig
 
@@ -150,7 +150,7 @@ if mode == "Single Station":
             c1.metric("Total Lost", len(df))
             c2.metric("Worst Cluster", safe_top(df["Cluster"]))
             c3.metric("Worst Aisle", safe_top(df["Aisle"]))
-            c4.metric("Top DSP", str(safe_top(df["DSP Name"]))[:15])  # truncate long DSP names
+            c4.metric("Worst DSP", str(safe_top(df["DSP Name"]))[:15])  # truncate long DSP names
 
             if len(df) < 5:
                 st.info("Small dataset — consider uploading a full week.")
@@ -178,14 +178,14 @@ if mode == "Single Station":
                     if len(size_counts) > 0:
                         colors = ["green", "orange", "red", "darkred", "grey"][:len(size_counts)]
                         fig = plot_bar(size_counts, "Size Category", "Lost Parcels",
-                                       f"Lost by Size ({date_range_text})", color=colors, figsize=(8, 4))
+                                       f"Lost by Size ({date_range_text})", color=colors)
                         st.pyplot(fig)
 
                     # Cluster bar chart
                     cl_counts = df["Cluster"].dropna().value_counts()
                     if len(cl_counts) > 0:
                         st.pyplot(plot_bar(cl_counts, "Cluster", "Lost Parcels",
-                                           f"Lost by Cluster ({date_range_text})", figsize=(8, 4)))
+                                           f"Lost by Cluster ({date_range_text})"))
 
             # TAB 2: LOCATION
             with tab2:
@@ -203,9 +203,8 @@ if mode == "Single Station":
 
                     if loc_view == "Chart":
                         if len(loc_data) > 0:
-                            rot = 45 if view_by == "Sort Zone" else 0  # rotate zone labels
                             st.pyplot(plot_bar(loc_data, view_by, "Lost Parcels",
-                                               f"Cluster {sel_cluster} by {view_by}", rotate=rot, figsize=(14, 5)))
+                                               f"Cluster {sel_cluster} by {view_by}", figsize=(10, 3.5)))
 
                         # Size filter within cluster
                         st.subheader(f"Size by Aisle in Cluster {sel_cluster}")
@@ -215,7 +214,7 @@ if mode == "Single Station":
                         sz_data = size_filt["Aisle"].dropna().value_counts()
                         if len(sz_data) > 0:
                             st.pyplot(plot_bar(sz_data, "Aisle", "Lost Parcels",
-                                               f"'{sel_size}' in Cluster {sel_cluster}", color="red", figsize=(12, 5)))
+                                               f"'{sel_size}' in Cluster {sel_cluster}", color="red"))
                         else:
                             st.info(f"No '{sel_size}' parcels in this cluster.")
                     else:
@@ -254,10 +253,10 @@ if mode == "Single Station":
                 if dsp_view == "Chart":
                     if len(dsp_data) > 0:
                         st.pyplot(plot_bar(dsp_data, "DSP", "Lost Parcels",
-                                           f"Lost by DSP ({date_range_text})", color="orange", rotate=45))
+                                           f"Lost by DSP ({date_range_text})", color="orange"))
                     if len(cycle_data) > 0:
                         st.pyplot(plot_bar(cycle_data, "Cycle", "Lost Parcels",
-                                           f"Lost by Cycle ({date_range_text})", color="purple", figsize=(10, 5)))
+                                           f"Lost by Cycle ({date_range_text})", color="purple"))
                 else:
                     if len(dsp_data) > 0:
                         st.subheader("DSP")
@@ -274,7 +273,7 @@ if mode == "Single Station":
 
                 if time_view == "Chart":
                     st.pyplot(plot_bar(day_data, "Day", "Lost Parcels",
-                                       f"Lost by Day ({date_range_text})", color="green", figsize=(10, 5)))
+                                       f"Lost by Day ({date_range_text})", color="green"))
                 else:
                     st.dataframe(make_table(day_data, "Day", "Lost Parcels"))
 
@@ -482,16 +481,17 @@ else:
             if view == "Chart":
                 # Total losts bar
                 st.subheader("Total Lost by Station")
-                fig, ax = plt.subplots(figsize=(10, 5))
+                fig, ax = plt.subplots(figsize=(8, 3.5))
                 ax.bar(names, [len(stations[n]) for n in names], color=STATION_COLORS[:len(names)])
                 ax.set_ylabel("Lost Parcels")
                 ax.set_title("Total Lost Parcels by Station")
+                plt.xticks(rotation=0, ha="center")
                 plt.tight_layout()
                 st.pyplot(fig)
 
                 # Grouped size breakdown
                 st.subheader("Size Breakdown by Station")
-                fig2, ax2 = plt.subplots(figsize=(12, 5))
+                fig2, ax2 = plt.subplots(figsize=(9, 3.5))
                 x = range(len(SIZE_ORDER))
                 w = 0.8 / len(names)  # bar width based on station count
                 for idx, name in enumerate(names):
@@ -502,6 +502,7 @@ else:
                 ax2.set_xticklabels(SIZE_ORDER)
                 ax2.set_ylabel("Lost Parcels")
                 ax2.legend()
+                plt.xticks(rotation=0, ha="center")
                 plt.tight_layout()
                 st.pyplot(fig2)
 
@@ -511,7 +512,7 @@ else:
                     cl = stations[name]["Cluster"].dropna().value_counts()
                     if len(cl) > 0:
                         st.pyplot(plot_bar(cl, "Cluster", "Lost", f"{name} — Clusters",
-                                           color=STATION_COLORS[idx], figsize=(10, 3)))
+                                           color=STATION_COLORS[idx], figsize=(8, 2.5)))
             else:
                 # Table view
                 st.subheader("Totals")
@@ -546,12 +547,12 @@ else:
                     ai = filt["Aisle"].dropna().value_counts().head(10)
                     if len(ai) > 0:
                         st.pyplot(plot_bar(ai, "Aisle", "Lost", f"{name} — Cluster {sel} Aisles",
-                                           color=STATION_COLORS[idx], figsize=(12, 4)))
+                                           color=STATION_COLORS[idx], figsize=(9, 3)))
                     # Zone chart
                     zn = filt["Sort Zone"].dropna().value_counts().head(10)
                     if len(zn) > 0:
                         st.pyplot(plot_bar(zn, "Sort Zone", "Lost", f"{name} — Cluster {sel} Zones",
-                                           color=STATION_COLORS[idx], rotate=45, figsize=(12, 4)))
+                                           color=STATION_COLORS[idx], figsize=(9, 3)))
                 else:
                     st.info(f"No cluster data for {name}.")
                 st.markdown("---")
@@ -567,7 +568,7 @@ else:
                 if len(data) > 0:
                     if rank_view == "Chart":
                         st.pyplot(plot_bar(data, "Lost", rank_by, f"{name} — Top 10 {rank_by}s",
-                                           color=STATION_COLORS[idx], horizontal=True, figsize=(12, 4)))
+                                           color=STATION_COLORS[idx], horizontal=True, figsize=(9, 3)))
                     else:
                         st.subheader(name)
                         st.dataframe(make_table(data, rank_by, "Lost Parcels"))
@@ -582,14 +583,14 @@ else:
                 for idx, name in enumerate(names):
                     dsp = stations[name]["DSP Name"].dropna().value_counts().head(10)
                     if len(dsp) > 0:
-                        st.pyplot(plot_bar(dsp, "DSP", "Lost", f"{name} — Top DSPs",
-                                           color=STATION_COLORS[idx], rotate=45, figsize=(12, 4)))
+                        st.pyplot(plot_bar(dsp, "DSP", "Lost", f"{name} — Worst DSPs",
+                                           color=STATION_COLORS[idx]))
 
                 # Grouped cycle chart
                 st.subheader("Cycle Comparison")
                 all_cycles = sorted(set().union(*[stations[n]["Assigned Cycle"].dropna().unique() for n in names]))
                 if all_cycles:
-                    fig, ax = plt.subplots(figsize=(12, 5))
+                    fig, ax = plt.subplots(figsize=(9, 3.5))
                     x = range(len(all_cycles))
                     w = 0.8 / len(names)
                     for idx, name in enumerate(names):
@@ -602,6 +603,7 @@ else:
                     ax.set_ylabel("Lost Parcels")
                     ax.set_title("Cycle Comparison — All Stations")
                     ax.legend()
+                    plt.xticks(rotation=0, ha="center")
                     plt.tight_layout()
                     st.pyplot(fig)
             else:
@@ -625,7 +627,7 @@ else:
             if time_view == "Chart":
                 # Overlaid line chart (all stations on one graph)
                 st.subheader("Day of Week — All Stations")
-                fig, ax = plt.subplots(figsize=(12, 5))
+                fig, ax = plt.subplots(figsize=(9, 3.5))
                 for idx, name in enumerate(names):
                     if "Day of Week" in stations[name].columns:
                         dd = stations[name]["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
@@ -634,6 +636,7 @@ else:
                 ax.set_ylabel("Lost Parcels")
                 ax.set_title("Lost by Day — Station Comparison")
                 ax.legend()
+                plt.xticks(rotation=0, ha="center")
                 plt.tight_layout()
                 st.pyplot(fig)
 
@@ -642,7 +645,7 @@ else:
                     if "Day of Week" in stations[name].columns:
                         dd = stations[name]["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
                         st.pyplot(plot_bar(dd, "Day", "Lost", f"{name} — by Day",
-                                           color=STATION_COLORS[idx], figsize=(10, 3)))
+                                           color=STATION_COLORS[idx], figsize=(8, 2.5)))
             else:
                 st.subheader("Day of Week Comparison")
                 day_all = {}
@@ -679,7 +682,7 @@ else:
                     "Total Lost": len(sdf),
                     "Worst Cluster": safe_top(sdf["Cluster"]),
                     "Worst Aisle": safe_top(sdf["Aisle"]),
-                    "Top DSP": safe_top(sdf["DSP Name"]),
+                    "Worst DSP": safe_top(sdf["DSP Name"]),
                     "Most Lost Size": safe_top(sdf["Size Category"]),
                     "Top Cycle": safe_top(sdf["Assigned Cycle"])
                 })
