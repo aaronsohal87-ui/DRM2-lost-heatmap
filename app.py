@@ -15,6 +15,14 @@ DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 SHIFT_ORDER = ["NS", "AM", "PM"]  # shift display order (Night Sort, AM, PM)
 SHIFT_COLORS = {"NS": "midnightblue", "AM": "darkorange", "PM": "darkgreen"}  # unique colour per shift
 
+# Shift definitions — clearly states the hours used to classify each shift
+# These are displayed to the user so there is full transparency on how shifts are assigned
+SHIFT_DEFINITIONS = {
+    "NS": "00:00 – 04:59 (Night Sort)",
+    "AM": "05:00 – 13:59 (AM Shift)",
+    "PM": "14:00 – 23:59 (PM Shift)"
+}
+
 # Shift classification by hour (based on DRM2 10-hour shifts with overlap)
 # NS = Night Sort: midnight to 4:59am (core night hours)
 # AM = Morning: 5:00am to 1:59pm (core AM hours)
@@ -55,7 +63,7 @@ def get_size(longest):
     Takes the longest side of a parcel (in cm) and returns its size category.
     Based on Amazon UK size tiers. Returns "Unknown" if no measurement available.
     """
-    if pd.isna(longest):  # pd.isna checks if the value is missing/NaN
+    if pd.isna(longest):
         return "Unknown"
     elif longest <= 35:
         return "Small"
@@ -72,9 +80,9 @@ def classify_shift(hour):
     Takes an hour (0-23) and returns which shift it belongs to.
     Uses SHIFT_HOUR_MAP defined above. Returns "Unknown" if hour is NaN.
     """
-    if pd.isna(hour):  # no timestamp available
+    if pd.isna(hour):
         return "Unknown"
-    return SHIFT_HOUR_MAP.get(int(hour), "Unknown")  # look up the hour in our map
+    return SHIFT_HOUR_MAP.get(int(hour), "Unknown")
 
 
 def clean_data(df):
@@ -93,38 +101,34 @@ def clean_data(df):
     # Step 2: Clean dimension columns — SCC exports them as text like "23.50 cm"
     for col in ["Package Length", "Package Width", "Package Height"]:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(" cm", "").str.replace("cm", "")  # remove "cm" text
-            df[col] = pd.to_numeric(df[col], errors="coerce")  # convert to number; "coerce" means invalid → NaN
+            df[col] = df[col].astype(str).str.replace(" cm", "").str.replace("cm", "")
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     # Step 3: Find the longest of the 3 dimensions, then classify size
     dim_cols = ["Package Length", "Package Width", "Package Height"]
-    if all(c in df.columns for c in dim_cols):  # check all 3 columns exist
-        df["Longest Side"] = df[dim_cols].max(axis=1)  # max across columns for each row
+    if all(c in df.columns for c in dim_cols):
+        df["Longest Side"] = df[dim_cols].max(axis=1)
     else:
-        df["Longest Side"] = float("nan")  # no dimension data available
+        df["Longest Side"] = float("nan")
 
-    df["Size Category"] = df["Longest Side"].apply(get_size)  # run get_size() on every row
+    df["Size Category"] = df["Longest Side"].apply(get_size)
 
     # Step 4: Parse the timestamp columns and extract day of week
     if "Last Updated Time" in df.columns:
-        df["Last Updated Time"] = pd.to_datetime(df["Last Updated Time"], errors="coerce")  # text → datetime
-        df["Day of Week"] = df["Last Updated Time"].dt.day_name()  # e.g. "Monday", "Tuesday"
+        df["Last Updated Time"] = pd.to_datetime(df["Last Updated Time"], errors="coerce")
+        df["Day of Week"] = df["Last Updated Time"].dt.day_name()
 
-    # Step 5: Classify shift from Dispatch Time
-    # Priority: Use Dispatch Time (actual last scan time before lost)
-    # Fallback: Use Assigned Cycle column to infer shift
+    # Step 5: Classify shift from Dispatch Time (best indicator of when parcel was last handled)
     if "Dispatch Time" in df.columns:
-        df["Dispatch Time"] = pd.to_datetime(df["Dispatch Time"], errors="coerce")  # parse dispatch time
-        df["Dispatch Hour"] = df["Dispatch Time"].dt.hour  # extract just the hour (0-23)
-        df["Shift"] = df["Dispatch Hour"].apply(classify_shift)  # map hour → shift name
+        df["Dispatch Time"] = pd.to_datetime(df["Dispatch Time"], errors="coerce")
+        df["Dispatch Hour"] = df["Dispatch Time"].dt.hour  # extract hour (0-23)
+        df["Shift"] = df["Dispatch Hour"].apply(classify_shift)  # hour → NS/AM/PM
     elif "Assigned Cycle" in df.columns:
-        # Fallback: try to infer shift from cycle name
-        # Common patterns: "AM", "PM", "C1"(AM), "C2"(PM), "RELO"(PM), "NS"
+        # Fallback: infer shift from cycle name text
         def cycle_to_shift(cycle):
-            """Map cycle name to shift — uses string matching on common patterns"""
             if pd.isna(cycle):
                 return "Unknown"
-            cycle_upper = str(cycle).upper().strip()  # normalise to uppercase
+            cycle_upper = str(cycle).upper().strip()
             if "NS" in cycle_upper or "NIGHT" in cycle_upper:
                 return "NS"
             elif "PM" in cycle_upper or "RELO" in cycle_upper or "C2" in cycle_upper:
@@ -132,121 +136,84 @@ def clean_data(df):
             elif "AM" in cycle_upper or "C1" in cycle_upper:
                 return "AM"
             else:
-                return "Unknown"  # can't determine shift from this cycle name
-        df["Shift"] = df["Assigned Cycle"].apply(cycle_to_shift)  # apply the mapping
-        df["Dispatch Hour"] = float("nan")  # no hour data available in fallback mode
+                return "Unknown"
+        df["Shift"] = df["Assigned Cycle"].apply(cycle_to_shift)
+        df["Dispatch Hour"] = float("nan")
     else:
-        # Neither column exists — shift analysis not possible
         df["Shift"] = "Unknown"
         df["Dispatch Hour"] = float("nan")
 
-    return df  # return the cleaned version
+    return df
 
 
 def get_station_name(df, filename):
-    """
-    Tries to get the station name from the "Station" column in the data.
-    If that column doesn't exist or is empty, falls back to using the filename.
-    """
+    """Get station name from Station column, or fall back to filename."""
     if "Station" in df.columns and len(df["Station"].dropna()) > 0:
-        return df["Station"].dropna().iloc[0]  # grab the first non-empty station value
-    # Fallback: clean up the filename to use as station name
+        return df["Station"].dropna().iloc[0]
     return filename.replace(".csv", "").replace("_", " ").strip()[:20]
 
 
 def get_date_range(df):
-    """
-    Looks at the earliest and latest dates in the data.
-    Returns a string like "01 Jul 2025 - 07 Jul 2025" or just "01 Jul 2025" if single day.
-    """
-    start = df["Last Updated Time"].min().strftime("%d %b %Y")  # earliest date formatted
-    end = df["Last Updated Time"].max().strftime("%d %b %Y")  # latest date formatted
-    return start if start == end else f"{start} - {end}"  # single day vs range
+    """Return formatted date range string from the data."""
+    start = df["Last Updated Time"].min().strftime("%d %b %Y")
+    end = df["Last Updated Time"].max().strftime("%d %b %Y")
+    return start if start == end else f"{start} - {end}"
 
 
 def safe_top(series, n=1):
-    """
-    Safely gets the most common value from a column.
-    Returns "N/A" if the column is empty (prevents crashes).
-    n=1 returns just the top value; n>1 returns the top N as a series.
-    """
-    counts = series.dropna().value_counts()  # count how many times each value appears
+    """Safely get top value(s) from a series, returns 'N/A' if empty."""
+    counts = series.dropna().value_counts()
     if len(counts) == 0:
-        return "N/A" if n == 1 else pd.Series(dtype="object")  # nothing to return
-    return counts.index[0] if n == 1 else counts.head(n)  # most frequent value
+        return "N/A" if n == 1 else pd.Series(dtype="object")
+    return counts.index[0] if n == 1 else counts.head(n)
 
 
 def truncate_labels(labels, max_len=DSP_NAME_MAX):
-    """
-    Shortens long text labels so they don't overlap on charts.
-    Adds "..." if truncated. e.g. "LEONARD BUCK LOGISTICS LTD" → "LEONARD BUCK LOGIST..."
-    """
+    """Shorten long text labels to prevent chart overlap. Adds '...' if truncated."""
     return [str(l)[:max_len] + "..." if len(str(l)) > max_len else str(l) for l in labels]
 
 
 def plot_bar(data, xlabel, ylabel, title, color="steelblue", horizontal=False, figsize=CHART_FULL):
-    """
-    Creates a bar chart from a pandas Series (index = labels, values = bar heights).
-    - horizontal=True makes it a horizontal bar chart (good for rankings + long names)
-    - figsize controls width and height in inches
-    - All labels are always horizontal (rotation=0)
-    - Long labels are auto-truncated to prevent overlap
-    Returns the figure object ready for st.pyplot().
-    """
-    fig, ax = plt.subplots(figsize=figsize)  # create figure + axes at specified size
-
-    # Truncate any long labels to prevent overlap
+    """Reusable bar chart. Horizontal=True for rankings/long labels. Labels always rotation=0."""
+    fig, ax = plt.subplots(figsize=figsize)
     labels = truncate_labels(data.index)
-
     if horizontal:
-        ax.barh(labels, data.values, color=color)  # horizontal bars
-        ax.invert_yaxis()  # put highest value at the top
+        ax.barh(labels, data.values, color=color)
+        ax.invert_yaxis()
     else:
-        ax.bar(labels, data.values, color=color)  # vertical bars
-
-    ax.set_xlabel(xlabel, fontsize=8)  # x-axis label, small font
-    ax.set_ylabel(ylabel, fontsize=8)  # y-axis label, small font
-    ax.set_title(title, fontsize=9)  # chart title, slightly larger
-    ax.tick_params(labelsize=7)  # make tick labels smaller so they fit
-    plt.xticks(rotation=0, ha="center")  # keep all labels horizontal
-    plt.tight_layout()  # auto-adjust spacing so nothing gets cut off
-    return fig  # return the figure (caller passes to st.pyplot)
+        ax.bar(labels, data.values, color=color)
+    ax.set_xlabel(xlabel, fontsize=8)
+    ax.set_ylabel(ylabel, fontsize=8)
+    ax.set_title(title, fontsize=9)
+    ax.tick_params(labelsize=7)
+    plt.xticks(rotation=0, ha="center")
+    plt.tight_layout()
+    return fig
 
 
 def plot_dsp(data, title, color="orange", figsize=CHART_FULL):
-    """
-    Special chart for DSP names — ALWAYS horizontal because DSP names are long.
-    Height auto-scales based on number of DSPs (more DSPs = taller chart).
-    """
-    n_bars = len(data)  # how many DSPs to show
-    auto_height = max(2, n_bars * 0.3)  # minimum 2 inches, scales up with more DSPs
-    fig, ax = plt.subplots(figsize=(figsize[0], auto_height))  # width stays same, height adapts
-
-    labels = truncate_labels(data.index)  # truncate long DSP names
-
-    ax.barh(labels, data.values, color=color)  # horizontal bars — names on y-axis
-    ax.invert_yaxis()  # worst DSP (highest value) at the top
-    ax.set_xlabel("Lost Parcels", fontsize=8)  # x-axis = count
-    ax.set_ylabel("DSP", fontsize=8)  # y-axis = DSP names
-    ax.set_title(title, fontsize=9)  # chart title
-    ax.tick_params(labelsize=7)  # small font for tick labels
-    plt.tight_layout()  # prevent cutoff
+    """Horizontal bar chart for DSP names. Height auto-scales with number of bars."""
+    n_bars = len(data)
+    auto_height = max(2, n_bars * 0.3)
+    fig, ax = plt.subplots(figsize=(figsize[0], auto_height))
+    labels = truncate_labels(data.index)
+    ax.barh(labels, data.values, color=color)
+    ax.invert_yaxis()
+    ax.set_xlabel("Lost Parcels", fontsize=8)
+    ax.set_ylabel("DSP", fontsize=8)
+    ax.set_title(title, fontsize=9)
+    ax.tick_params(labelsize=7)
+    plt.tight_layout()
     return fig
 
 
 def plot_shift(data, title, figsize=CHART_FULL):
-    """
-    Bar chart specifically for shift breakdown — uses shift-specific colours.
-    NS=dark blue, AM=orange, PM=green. Reindexes to ensure NS/AM/PM order.
-    """
-    # Reindex to force NS → AM → PM order, fill missing shifts with 0
+    """Bar chart for shift breakdown with shift-specific colours. Forces NS/AM/PM order."""
     data = data.reindex(SHIFT_ORDER, fill_value=0)
-    # Only show shifts that have data (drop zeros)
-    data = data[data > 0]
-
-    fig, ax = plt.subplots(figsize=figsize)  # create chart
-    colors = [SHIFT_COLORS.get(s, "grey") for s in data.index]  # colour per shift
-    ax.bar(data.index, data.values, color=colors)  # vertical bars
+    data = data[data > 0]  # only show shifts with data
+    fig, ax = plt.subplots(figsize=figsize)
+    colors = [SHIFT_COLORS.get(s, "grey") for s in data.index]
+    ax.bar(data.index, data.values, color=colors)
     ax.set_xlabel("Shift", fontsize=8)
     ax.set_ylabel("Lost Parcels", fontsize=8)
     ax.set_title(title, fontsize=9)
@@ -257,160 +224,216 @@ def plot_shift(data, title, figsize=CHART_FULL):
 
 
 def make_table(series, col1_name, col2_name):
-    """
-    Converts a value_counts() result into a clean numbered table.
-    e.g. turns {Cluster A: 50, Cluster B: 30} into a dataframe with rank 1, 2, 3...
-    """
-    tbl = series.reset_index()  # move index (category names) into a column
-    tbl.columns = [col1_name, col2_name]  # rename columns to something readable
-    tbl.index = range(1, len(tbl) + 1)  # number rows starting from 1 (not 0)
+    """Convert value_counts() into a numbered display table."""
+    tbl = series.reset_index()
+    tbl.columns = [col1_name, col2_name]
+    tbl.index = range(1, len(tbl) + 1)
     return tbl
 
 
-def make_shift_table(df, total):
+def make_shift_leaderboard(df, total):
     """
-    Creates a shift leaderboard table showing rank, shift name, count, and percentage.
-    Filters out "Unknown" shifts and sorts by count descending (worst shift first).
+    Creates shift leaderboard table: Rank, Shift, Lost Count, % of Total.
+    Filters out Unknown shifts. Sorted worst (most losts) first.
     """
-    # Count losts per shift, exclude Unknown
-    shift_counts = df[df["Shift"] != "Unknown"]["Shift"].value_counts()  # count per shift
-    shift_counts = shift_counts.reindex(SHIFT_ORDER).dropna().astype(int)  # force NS/AM/PM order, drop empty
-    shift_counts = shift_counts.sort_values(ascending=False)  # worst first
-
-    # Build the leaderboard table
+    shift_counts = df[df["Shift"] != "Unknown"]["Shift"].value_counts()
+    shift_counts = shift_counts.reindex(SHIFT_ORDER).dropna().astype(int)
+    shift_counts = shift_counts.sort_values(ascending=False)
     rows = []
     for shift_name, count in shift_counts.items():
-        pct = round(count / total * 100, 1) if total > 0 else 0  # percentage of total
+        pct = round(count / total * 100, 1) if total > 0 else 0
         rows.append({"Shift": shift_name, "Lost Parcels": count, "% of Total": f"{pct}%"})
-
-    tbl = pd.DataFrame(rows)  # create dataframe from rows
-    tbl.index = range(1, len(tbl) + 1)  # rank starting from 1
+    tbl = pd.DataFrame(rows)
+    tbl.index = range(1, len(tbl) + 1)
     return tbl
+
+
+def render_shift_tab(df, total, date_range_text, key_prefix=""):
+    """
+    Renders the full Shift tab content for a single station.
+    Shows: definitions, leaderboard, chart, and per-shift parcel tables with dispatch times.
+    key_prefix is used to avoid widget key conflicts in multi-station mode.
+    """
+    # --- SHIFT DEFINITIONS (transparency — user sees exactly how shifts are classified) ---
+    st.subheader("📋 Shift Definitions")
+    st.caption("Parcels are assigned to shifts based on their **Dispatch Time** (last scan before lost state).")
+    # Display the time windows clearly so there is no ambiguity
+    def_cols = st.columns(3)  # 3 columns for 3 shifts
+    for idx, (shift, definition) in enumerate(SHIFT_DEFINITIONS.items()):
+        with def_cols[idx]:
+            color = SHIFT_COLORS[shift]  # get shift colour
+            st.markdown(f"**{shift}:** {definition}")  # show shift name + time window
+
+    st.markdown("---")
+
+    # --- SHIFT LEADERBOARD (ranked table) ---
+    shift_known = df[df["Shift"] != "Unknown"]  # filter out rows with no shift data
+
+    if len(shift_known) > 0:
+        st.subheader("🏆 Shift Leaderboard")
+        st.caption("Ranked by number of lost parcels. Worst shift at the top.")
+
+        # Show the ranked table
+        leaderboard = make_shift_leaderboard(df, total)
+        st.dataframe(leaderboard, use_container_width=False)
+
+        # Shift bar chart
+        shift_counts = shift_known["Shift"].value_counts()
+        st.pyplot(plot_shift(shift_counts, f"Lost Parcels by Shift ({date_range_text})"))
+
+        st.markdown("---")
+
+        # --- PER-SHIFT PARCEL TABLES (full transparency — no plausible deniability) ---
+        st.subheader("📦 Parcels Lost Per Shift")
+        st.caption("Each shift's lost parcels listed with dispatch time for verification. "
+                   "Sorted by time so shift managers can cross-check against their records.")
+
+        # Loop through shifts in order of worst to best (most losts first)
+        shift_ranked = shift_known["Shift"].value_counts()
+        for shift_name in shift_ranked.index:
+            # Get parcels belonging to this shift
+            shift_df = df[df["Shift"] == shift_name].copy()
+            count = len(shift_df)
+            pct = round(count / total * 100, 1) if total > 0 else 0
+
+            # Expandable section per shift (keeps page tidy, user clicks to expand)
+            with st.expander(f"**{shift_name} Shift** — {count} parcels ({pct}%) | {SHIFT_DEFINITIONS[shift_name]}", expanded=False):
+                # Select columns to display — must include Dispatch Time for verification
+                display_cols = ["Tracking ID", "Dispatch Time", "Cluster", "Aisle",
+                                "Sort Zone", "DSP Name", "Size Category", "Assigned Cycle"]
+                display_cols = [c for c in display_cols if c in df.columns]  # only include cols that exist
+
+                # Sort by Dispatch Time ascending (earliest first) so timeline is clear
+                if "Dispatch Time" in display_cols:
+                    shift_df = shift_df.sort_values("Dispatch Time", ascending=True)
+
+                # Format Dispatch Time nicely if it exists (show date + time)
+                if "Dispatch Time" in shift_df.columns:
+                    shift_df["Dispatch Time"] = shift_df["Dispatch Time"].dt.strftime("%d/%m/%Y %H:%M")
+
+                # Reset index for clean numbered display
+                display_df = shift_df[display_cols].reset_index(drop=True)
+                display_df.index = range(1, len(display_df) + 1)  # start from 1
+
+                st.dataframe(display_df, use_container_width=True)  # show full-width table
+
+        # Show count of parcels with no shift data (Unknown)
+        unknown_count = len(df[df["Shift"] == "Unknown"])
+        if unknown_count > 0:
+            st.warning(f"⚠️ {unknown_count} parcels could not be assigned to a shift "
+                       f"(no Dispatch Time available). These are excluded from shift rankings.")
+    else:
+        # No shift data at all
+        st.warning("Shift analysis requires 'Dispatch Time' column in your SCC export. "
+                   "Add 'Dispatch Time' to your SCC filters and re-export for shift accountability data.")
+        st.info("Currently falling back to 'Assigned Cycle' column — if that's also empty, "
+                "shift analysis cannot be performed.")
 
 
 # --- MODE TOGGLE (appears at the very top of the app) ---
-# User chooses between analysing one station or comparing multiple
 mode = st.radio("Mode:", ["Single Station", "Multi-Station Compare"], horizontal=True, key="mode_toggle")
 
 
 # =====================================================================
-# SINGLE STATION MODE — one CSV upload, full analysis
+# SINGLE STATION MODE
 # =====================================================================
 if mode == "Single Station":
 
-    # File uploader widget — only accepts .csv files
     uploaded_file = st.file_uploader("Upload SCC export (.csv)", type="csv")
 
-    if uploaded_file is not None:  # only run if user has uploaded something
-        df = pd.read_csv(uploaded_file)  # read the CSV into a pandas dataframe
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
 
-        # Warn user if sensitive columns were found (they're auto-removed anyway)
         found_sensitive = [c for c in SENSITIVE_COLS if c in df.columns]
         if found_sensitive:
             st.warning(f"Sensitive columns found and removed: {', '.join(found_sensitive)}")
 
-        df = clean_data(df)  # apply all cleaning (dimensions, sizes, dates, shifts)
+        df = clean_data(df)
 
-        # Check all required columns exist
         missing = [c for c in REQUIRED_COLS if c not in df.columns]
         if missing:
-            st.error(f"Missing required columns: {', '.join(missing)}")  # show what's missing
+            st.error(f"Missing required columns: {', '.join(missing)}")
             st.info("Check your SCC export includes these fields, then re-upload.")
         elif len(df) == 0:
-            st.warning("File has no data rows.")  # empty file check
+            st.warning("File has no data rows.")
         else:
-            st.success(f"Data loaded — {len(df)} packages ready.")  # confirmation message
+            st.success(f"Data loaded — {len(df)} packages ready.")
 
-            date_range_text = get_date_range(df)  # e.g. "01 Jul 2025 - 07 Jul 2025"
+            date_range_text = get_date_range(df)
 
-            # --- SUMMARY METRICS (5 boxes always visible at the top) ---
+            # --- SUMMARY METRICS (5 boxes) ---
             st.subheader(f"Quick Summary ({date_range_text})")
-            c1, c2, c3, c4, c5 = st.columns(5)  # 5 equal-width columns
-            c1.metric("Total Lost", len(df))  # total number of rows = total lost parcels
-            c2.metric("Worst Cluster", safe_top(df["Cluster"]))  # cluster with most losts
-            c3.metric("Worst Aisle", safe_top(df["Aisle"]))  # aisle with most losts
-            c4.metric("Worst DSP", str(safe_top(df["DSP Name"]))[:15])  # DSP with most losts (truncated)
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Total Lost", len(df))
+            c2.metric("Worst Cluster", safe_top(df["Cluster"]))
+            c3.metric("Worst Aisle", safe_top(df["Aisle"]))
+            c4.metric("Worst DSP", str(safe_top(df["DSP Name"]))[:15])
 
-            # 5th metric: Worst Shift (only if shift data is available)
-            shift_known = df[df["Shift"] != "Unknown"]["Shift"]  # filter out unknowns
+            # Worst Shift metric
+            shift_known = df[df["Shift"] != "Unknown"]["Shift"]
             if len(shift_known) > 0:
-                c5.metric("Worst Shift", safe_top(shift_known))  # shift with most losts
+                c5.metric("Worst Shift", safe_top(shift_known))
             else:
-                c5.metric("Worst Shift", "N/A")  # no shift data
+                c5.metric("Worst Shift", "N/A")
 
             if len(df) < 5:
-                st.info("Small dataset — consider uploading a full week.")  # warn about tiny samples
+                st.info("Small dataset — consider uploading a full week.")
 
-            # --- CLUSTER SWEEP PRIORITY (ranked list below metrics) ---
-            cl_ranked = df["Cluster"].dropna().value_counts()  # count losts per cluster
+            # Cluster sweep priority
+            cl_ranked = df["Cluster"].dropna().value_counts()
             if len(cl_ranked) > 0:
-                # Build a short ranked string: "#1 Cluster A (25), #2 Cluster B (18)..."
                 sweep_parts = [f"#{i+1} {cl} ({n})" for i, (cl, n) in enumerate(cl_ranked.head(3).items())]
-                st.info(f"🧹 **Sweep Priority:** {' → '.join(sweep_parts)}")  # show as info banner
+                st.info(f"🧹 **Sweep Priority:** {' → '.join(sweep_parts)}")
 
-            # --- TABS (the 7 main sections of the app) ---
-            tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
-                ["Overview", "Location", "Rankings", "DSP & Cycle", "Time", "Export", "Bridge"]
+            # --- TABS (8 tabs — Shift is new) ---
+            tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+                ["Overview", "Location", "Rankings", "DSP & Cycle", "Shift", "Time", "Export", "Bridge"]
             )
 
-            # ==============================================================
-            # TAB 1: OVERVIEW — size breakdown + cluster summary
-            # ==============================================================
+            # TAB 1: OVERVIEW
             with tab1:
-                st.caption("Size breakdown and cluster summary.")  # small description text
+                st.caption("Size breakdown and cluster summary.")
                 view = st.radio("Display:", ["Table", "Chart"], horizontal=True, key="ov_view")
 
                 if view == "Table":
                     st.subheader("Size Breakdown")
-                    st.write(df["Size Category"].value_counts())  # count per size category
-
+                    st.write(df["Size Category"].value_counts())
                     st.subheader("Cluster × Size")
-                    # Pivot table: rows=Cluster, columns=Size, values=count
                     tbl = df.groupby(["Cluster", "Size Category"]).size().unstack(fill_value=0)
-                    tbl["Total"] = tbl.sum(axis=1)  # add a Total column
-                    st.dataframe(tbl)  # display as interactive table
+                    tbl["Total"] = tbl.sum(axis=1)
+                    st.dataframe(tbl)
                 else:
-                    # Bar chart of size categories
                     size_counts = df["Size Category"].value_counts()
                     if len(size_counts) > 0:
                         colors = ["green", "orange", "red", "darkred", "grey"][:len(size_counts)]
-                        fig = plot_bar(size_counts, "Size Category", "Lost Parcels",
-                                       f"Lost by Size ({date_range_text})", color=colors)
-                        st.pyplot(fig)
-
-                    # Bar chart of clusters
+                        st.pyplot(plot_bar(size_counts, "Size Category", "Lost Parcels",
+                                           f"Lost by Size ({date_range_text})", color=colors))
                     cl_counts = df["Cluster"].dropna().value_counts()
                     if len(cl_counts) > 0:
                         st.pyplot(plot_bar(cl_counts, "Cluster", "Lost Parcels",
                                            f"Lost by Cluster ({date_range_text})"))
 
-            # ==============================================================
-            # TAB 2: LOCATION — drill into a specific cluster
-            # ==============================================================
+            # TAB 2: LOCATION
             with tab2:
                 st.caption("Drill into a cluster to see aisle/zone hotspots.")
-                clusters = sorted(df["Cluster"].dropna().unique())  # get unique clusters, sorted
+                clusters = sorted(df["Cluster"].dropna().unique())
 
                 if clusters:
-                    # Dropdown to pick which cluster to inspect
                     sel_cluster = st.selectbox("Cluster:", clusters, key="cl_sel")
-                    filt = df[df["Cluster"] == sel_cluster]  # filter dataframe to just that cluster
+                    filt = df[df["Cluster"] == sel_cluster]
                     st.write(f"{len(filt)} parcels in Cluster {sel_cluster}")
 
-                    # Choose whether to view by Aisle or Sort Zone
                     view_by = st.selectbox("View by:", ["Aisle", "Sort Zone"], key="view_by")
                     loc_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="loc_view")
-                    loc_data = filt[view_by].dropna().value_counts()  # count per aisle/zone
+                    loc_data = filt[view_by].dropna().value_counts()
 
                     if loc_view == "Chart":
                         if len(loc_data) > 0:
                             st.pyplot(plot_bar(loc_data, view_by, "Lost Parcels",
                                                f"Cluster {sel_cluster} by {view_by}", figsize=CHART_WIDE))
-
-                        # Sub-filter: look at a specific size within this cluster
                         st.subheader(f"Size by Aisle in Cluster {sel_cluster}")
                         sel_size = st.selectbox("Size:", sorted(df["Size Category"].dropna().unique()), key="sz_sel")
-                        size_filt = filt[filt["Size Category"] == sel_size]  # filter by size too
+                        size_filt = filt[filt["Size Category"] == sel_size]
                         st.write(f"{len(size_filt)} '{sel_size}' parcels")
                         sz_data = size_filt["Aisle"].dropna().value_counts()
                         if len(sz_data) > 0:
@@ -419,7 +442,6 @@ if mode == "Single Station":
                         else:
                             st.info(f"No '{sel_size}' parcels in this cluster.")
                     else:
-                        # Table view
                         if len(loc_data) > 0:
                             st.dataframe(make_table(loc_data, "Location", "Lost Parcels"))
                         st.subheader("Size Breakdown")
@@ -429,18 +451,15 @@ if mode == "Single Station":
                 else:
                     st.info("No cluster data available.")
 
-            # ==============================================================
-            # TAB 3: RANKINGS — top 10 worst locations
-            # ==============================================================
+            # TAB 3: RANKINGS
             with tab3:
                 st.caption("Top 10 worst locations.")
                 rank_by = st.selectbox("Rank by:", ["Sort Zone", "Aisle"], key="rank_sel")
                 rank_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="rank_view")
-                rank_data = df[rank_by].dropna().value_counts().head(10)  # top 10 only
+                rank_data = df[rank_by].dropna().value_counts().head(10)
 
                 if len(rank_data) > 0:
                     if rank_view == "Chart":
-                        # Horizontal bar chart — best for rankings
                         st.pyplot(plot_bar(rank_data, "Lost Parcels", rank_by,
                                            f"Top 10 {rank_by}s ({date_range_text})",
                                            color="darkred", horizontal=True))
@@ -449,84 +468,35 @@ if mode == "Single Station":
                 else:
                     st.info("No data available.")
 
-            # ==============================================================
-            # TAB 4: DSP & CYCLE — which DSPs lose most, which cycles
-            # ==============================================================
+            # TAB 4: DSP & CYCLE
             with tab4:
                 st.caption("DSP performance and cycle distribution.")
                 dsp_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="dsp_view")
-                dsp_data = df["DSP Name"].dropna().value_counts()  # count losts per DSP
-                cycle_data = df["Assigned Cycle"].dropna().value_counts()  # count losts per cycle
+                dsp_data = df["DSP Name"].dropna().value_counts()
+                cycle_data = df["Assigned Cycle"].dropna().value_counts()
 
                 if dsp_view == "Chart":
                     if len(dsp_data) > 0:
-                        # DSP chart is ALWAYS horizontal — names are too long for x-axis
                         st.pyplot(plot_dsp(dsp_data, f"Lost by DSP ({date_range_text})", color="orange"))
                     if len(cycle_data) > 0:
-                        # Cycle names are short so vertical bars work fine
                         st.pyplot(plot_bar(cycle_data, "Cycle", "Lost Parcels",
                                            f"Lost by Cycle ({date_range_text})", color="purple"))
                 else:
-                    # TABLE VIEW — sorted alphabetically by DSP name for easy deep-dive
                     if len(dsp_data) > 0:
                         st.subheader("DSP (alphabetical)")
-                        # Sort alphabetically instead of by count — easier to find a specific DSP
-                        dsp_alpha = dsp_data.sort_index()  # sort by DSP name A→Z
+                        dsp_alpha = dsp_data.sort_index()  # A→Z for easy deep-dive
                         st.dataframe(make_table(dsp_alpha, "DSP", "Lost Parcels"))
                     if len(cycle_data) > 0:
                         st.subheader("Cycle")
                         st.dataframe(make_table(cycle_data, "Cycle", "Lost Parcels"))
 
-            # ==============================================================
-            # TAB 5: TIME — day-of-week + SHIFT analysis + tracking ID lookup
-            # ==============================================================
+            # TAB 5: SHIFT (NEW DEDICATED TAB)
             with tab5:
-                st.caption("Day-of-week patterns, shift rankings, and tracking ID lookup.")
+                render_shift_tab(df, len(df), date_range_text, key_prefix="single")
 
-                # --- SHIFT LEADERBOARD (new section) ---
-                st.subheader("⏱️ Shift Rankings")
-                shift_known = df[df["Shift"] != "Unknown"]  # only rows with known shift
-                total = len(df)
-
-                if len(shift_known) > 0:
-                    # Show shift leaderboard table
-                    shift_tbl = make_shift_table(df, total)
-                    st.dataframe(shift_tbl)  # ranked table: Shift, Count, % of Total
-
-                    # Shift bar chart
-                    shift_counts = shift_known["Shift"].value_counts()
-                    st.pyplot(plot_shift(shift_counts, f"Lost Parcels by Shift ({date_range_text})"))
-
-                    # --- SHIFT DRILL-DOWN (verify which parcels belong to each shift) ---
-                    st.subheader("🔍 Verify Shift Parcels")
-                    st.caption("Select a shift to see individual parcels + their dispatch times for verification.")
-                    available_shifts = [s for s in SHIFT_ORDER if s in shift_known["Shift"].values]
-
-                    if available_shifts:
-                        sel_shift = st.selectbox("Select Shift:", available_shifts, key="shift_sel")
-                        shift_df = df[df["Shift"] == sel_shift]  # filter to selected shift
-                        st.write(f"**{len(shift_df)} parcels on {sel_shift} shift**")
-
-                        # Show parcels with their actual dispatch time for verification
-                        verify_cols = ["Tracking ID", "Dispatch Time", "Cluster", "Aisle",
-                                       "Sort Zone", "DSP Name", "Size Category"]
-                        # Only include columns that exist in the data
-                        verify_cols = [c for c in verify_cols if c in df.columns]
-                        # Sort by dispatch time so shift managers can check the timeline
-                        display_df = shift_df[verify_cols].sort_values("Dispatch Time", ascending=True) if "Dispatch Time" in verify_cols else shift_df[verify_cols]
-                        st.dataframe(display_df)  # show individual parcels for verification
-                    else:
-                        st.info("No shift data available for drill-down.")
-                else:
-                    # No Dispatch Time column — explain why shift analysis isn't available
-                    st.warning("Shift analysis requires 'Dispatch Time' column in your SCC export. "
-                               "Currently using 'Assigned Cycle' as fallback — if that's also empty, "
-                               "add 'Dispatch Time' to your SCC filters and re-export.")
-
-                st.markdown("---")  # divider between shift and day sections
-
-                # --- DAY OF WEEK (existing section) ---
-                st.subheader("📅 Day of Week")
+            # TAB 6: TIME
+            with tab6:
+                st.caption("Day-of-week patterns and tracking ID lookup.")
                 day_data = df["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
                 time_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="time_view")
 
@@ -536,55 +506,46 @@ if mode == "Single Station":
                 else:
                     st.dataframe(make_table(day_data, "Day", "Lost Parcels"))
 
-                # Day drill-down: select a day and see individual tracking IDs
                 st.subheader("Parcel Details by Day")
-                available_days = [d for d in DAY_ORDER if d in df["Day of Week"].values]  # only show days with data
+                available_days = [d for d in DAY_ORDER if d in df["Day of Week"].values]
                 if available_days:
                     sel_day = st.selectbox("Day:", available_days, key="day_sel")
-                    day_df = df[df["Day of Week"] == sel_day]  # filter to that day
+                    day_df = df[df["Day of Week"] == sel_day]
                     st.write(f"{len(day_df)} parcels on {sel_day}")
-                    # Only show useful columns in the table
                     show_cols = [c for c in ["Tracking ID", "Cluster", "Aisle", "Sort Zone", "DSP Name", "Size Category", "Shift"] if c in df.columns]
                     st.dataframe(day_df[show_cols])
 
-            # ==============================================================
-            # TAB 6: EXPORT — download cleaned data
-            # ==============================================================
-            with tab6:
+            # TAB 7: EXPORT
+            with tab7:
                 st.caption("Download cleaned data.")
-                # Creates a download button that saves the cleaned dataframe as CSV
                 st.download_button("Download CSV", df.to_csv(index=False),
                                    "Lost_Parcels_Cleaned.csv", "text/csv")
 
-            # ==============================================================
-            # TAB 7: BRIDGE — auto-generated report with dynamic actions
-            # ==============================================================
-            with tab7:
+            # TAB 8: BRIDGE
+            with tab8:
                 st.caption("Auto-generated bridge with dynamic action plans.")
-                total = len(df)  # total number of lost parcels
+                total = len(df)
 
-                # --- GATHER ALL KEY STATS ---
-                cl_counts = df["Cluster"].dropna().value_counts()  # losts per cluster
-                ai_counts = df["Aisle"].dropna().value_counts()  # losts per aisle
-                dsp_counts = df["DSP Name"].dropna().value_counts()  # losts per DSP
-                sz_counts = df["Size Category"].value_counts()  # losts per size
-                cy_counts = df["Assigned Cycle"].dropna().value_counts()  # losts per cycle
-                day_counts = df["Day of Week"].dropna().value_counts()  # losts per day
-                shift_counts_bridge = df[df["Shift"] != "Unknown"]["Shift"].value_counts()  # losts per shift
+                cl_counts = df["Cluster"].dropna().value_counts()
+                ai_counts = df["Aisle"].dropna().value_counts()
+                dsp_counts = df["DSP Name"].dropna().value_counts()
+                sz_counts = df["Size Category"].value_counts()
+                cy_counts = df["Assigned Cycle"].dropna().value_counts()
+                day_counts = df["Day of Week"].dropna().value_counts()
+                shift_counts_bridge = df[df["Shift"] != "Unknown"]["Shift"].value_counts()
 
-                # Safely extract worst values (won't crash if data is empty)
                 w_cluster = cl_counts.index[0] if len(cl_counts) > 0 else "N/A"
                 w_cluster_n = cl_counts.values[0] if len(cl_counts) > 0 else 0
                 w_cluster_pct = round(w_cluster_n / total * 100, 1) if total > 0 else 0
 
                 w_aisle = ai_counts.index[0] if len(ai_counts) > 0 else "N/A"
                 w_aisle_n = ai_counts.values[0] if len(ai_counts) > 0 else 0
-                avg_aisle = ai_counts.mean() if len(ai_counts) > 0 else 1  # average losts per aisle
+                avg_aisle = ai_counts.mean() if len(ai_counts) > 0 else 1
 
                 w_dsp = dsp_counts.index[0] if len(dsp_counts) > 0 else "N/A"
                 w_dsp_n = dsp_counts.values[0] if len(dsp_counts) > 0 else 0
-                avg_dsp = dsp_counts.mean() if len(dsp_counts) > 0 else 1  # average losts per DSP
-                dsp_mult = round(w_dsp_n / avg_dsp, 1) if avg_dsp > 0 else 1.0  # how many x above average
+                avg_dsp = dsp_counts.mean() if len(dsp_counts) > 0 else 1
+                dsp_mult = round(w_dsp_n / avg_dsp, 1) if avg_dsp > 0 else 1.0
 
                 w_size = sz_counts.index[0] if len(sz_counts) > 0 else "N/A"
                 w_size_n = sz_counts.values[0] if len(sz_counts) > 0 else 0
@@ -595,44 +556,35 @@ if mode == "Single Station":
                 w_shift = shift_counts_bridge.index[0] if len(shift_counts_bridge) > 0 else "N/A"
                 w_shift_n = shift_counts_bridge.values[0] if len(shift_counts_bridge) > 0 else 0
 
-                # --- DAILY BREAKDOWN (how many losts per calendar date) ---
-                df["Date"] = df["Last Updated Time"].dt.strftime("%d/%m")  # format as DD/MM
-                daily = df.groupby("Date").size()  # count per date
+                df["Date"] = df["Last Updated Time"].dt.strftime("%d/%m")
+                daily = df.groupby("Date").size()
                 daily_lines = "\n".join([f"{d} - {n} lost" for d, n in daily.items()])
 
-                # --- SHIFT BREAKDOWN ---
                 shift_lines = "\n".join([f"  {s}: {n} ({round(n/total*100,1)}%)" for s, n in shift_counts_bridge.items()]) if len(shift_counts_bridge) > 0 else "  (No shift data)"
 
-                # --- TOP 3 CLUSTERS WITH THEIR TOP 3 AISLES ---
                 cluster_details = ""
-                for cl_name, cl_n in cl_counts.head(3).items():  # loop through top 3 clusters
-                    pct = round(cl_n / total * 100, 1)  # percentage of total
+                for cl_name, cl_n in cl_counts.head(3).items():
+                    pct = round(cl_n / total * 100, 1)
                     top_aisles = df[df["Cluster"] == cl_name]["Aisle"].dropna().value_counts().head(3)
                     aisles_str = ", ".join([f"{a} ({n})" for a, n in top_aisles.items()])
                     cluster_details += f"  Cluster {cl_name}: {cl_n} ({pct}%) — Aisles: {aisles_str}\n"
 
-                # Top 3 DSPs formatted
                 dsp_lines = "\n".join([f"  {d}: {n} ({round(n/total*100,1)}%)" for d, n in dsp_counts.head(3).items()])
-                # All sizes formatted
                 size_lines = "\n".join([f"  {s}: {n}" for s, n in sz_counts.items()])
 
-                # State breakdown (only if the column exists in the export)
                 if "State" in df.columns:
                     state_lines = "\n".join([f"  {s}: {n}" for s, n in df["State"].dropna().value_counts().items()])
                 else:
                     state_lines = "  (Not in export)"
 
-                # --- DYNAMIC ACTION PLANS (change based on patterns in the data) ---
                 actions = []
-                ac = lambda txt: actions.append(f"AC{len(actions)+1}: {txt}")  # shorthand: auto-numbers actions
+                ac = lambda txt: actions.append(f"AC{len(actions)+1}: {txt}")
 
-                # Pattern 1: Is one cluster holding >40% of all losts?
                 if w_cluster_pct > 40:
                     ac(f"Dedicated PS to Cluster {w_cluster} full shift — {w_cluster_pct}% of losts here.")
                 else:
                     ac(f"PS rotation between top clusters ({', '.join([str(c) for c in cl_counts.head(3).index])}).")
 
-                # Pattern 2: Is one DSP significantly worse than average?
                 if dsp_mult >= 2.0:
                     ac(f"DSP {w_dsp} stand-down with leadership — {dsp_mult}x average.")
                 elif dsp_mult >= 1.5:
@@ -640,7 +592,6 @@ if mode == "Single Station":
                 else:
                     ac("Station-wide process refresher — losts spread evenly across DSPs.")
 
-                # Pattern 3: What size is causing the most issues?
                 if w_size in ["Large Oversize", "Small Oversize"]:
                     ac(f"Oversize stow audit in Aisle {w_aisle} — {w_size} most commonly lost.")
                 elif w_size == "Small":
@@ -648,7 +599,6 @@ if mode == "Single Station":
                 else:
                     ac(f"Stow quality walk in Cluster {w_cluster} for {w_size} parcels.")
 
-                # Pattern 4: Is one aisle way above average?
                 if avg_aisle > 0 and w_aisle_n >= avg_aisle * 3:
                     ac(f"Physical inspection of Aisle {w_aisle} — {round(w_aisle_n/avg_aisle,1)}x average.")
                 elif avg_aisle > 0 and w_aisle_n >= avg_aisle * 2:
@@ -656,20 +606,16 @@ if mode == "Single Station":
                 else:
                     ac("Daily PS huddle to review losts by aisle.")
 
-                # Pattern 5: Is one shift significantly worse?
                 if len(shift_counts_bridge) > 1 and w_shift_n > total * 0.5:
-                    ac(f"{w_shift} shift 5-whys session — {w_shift_n} losts ({round(w_shift_n/total*100,1)}% of total). Review process compliance during handover windows.")
+                    ac(f"{w_shift} shift 5-whys — {w_shift_n} losts ({round(w_shift_n/total*100,1)}% of total).")
 
-                # Pattern 6: Are RELO cycles contributing more than 15%?
                 relo_n = sum(cy_counts.get(c, 0) for c in cy_counts.index if "RELO" in str(c))
                 if relo_n > total * 0.15:
                     ac(f"RELO process review — {relo_n} losts from relocation cycles.")
 
-                # Pattern 7: Is one day of the week responsible for >30% of all losts?
                 if len(daily) > 1 and w_day_n > total * 0.3:
                     ac(f"Review {w_day} staffing — {w_day_n} losts ({round(w_day_n/total*100,1)}% of total).")
 
-                # --- ASSEMBLE THE FULL BRIDGE TEXT ---
                 bridge = f"""Lost Parcels Bridge - DRM2
 {date_range_text}
 
@@ -694,11 +640,9 @@ RC4) Status:
 
 {chr(10).join(actions)}
 """
-                # Display as editable text box
                 st.subheader("Draft Bridge")
                 st.text_area("Edit:", value=bridge, height=450, key="bridge_txt")
 
-                # --- ENHANCE WITH QUICK (copy-paste prompt) ---
                 st.subheader("Enhance with Quick")
                 prompt = f"""Write a Lost Parcels bridge for DRM2. Use RC1-4 for root causes, AC1-4 for actions. Be specific.
 
@@ -709,73 +653,66 @@ Clusters: {cluster_details}DSPs: {dsp_lines}
 
 Generate specific actions a station manager would implement. Reference clusters, aisles, DSPs, sizes, days, shifts.
 """
-                st.code(prompt, language="text")  # st.code has a built-in copy icon
+                st.code(prompt, language="text")
                 st.info("Copy icon (top-right) → Quick → Ctrl+V")
 
 
 # =====================================================================
-# MULTI-STATION COMPARE MODE — upload 2-5 CSVs, see side-by-side
+# MULTI-STATION COMPARE MODE
 # =====================================================================
 else:
     st.subheader("Upload Station Data (2–5 stations)")
     st.caption("One SCC export per station. Station name auto-detected from 'Station' column.")
 
-    # Slider lets user pick how many stations they want to compare
     num = st.slider("Stations to compare:", 2, 5, 2, key="num_st")
 
-    # Create separate file uploaders arranged in columns
-    uploaded = {}  # will store {index: file} for each uploaded file
-    cols = st.columns(num)  # create N equal columns
+    uploaded = {}
+    cols = st.columns(num)
     for i in range(num):
-        with cols[i]:  # put each uploader in its own column
+        with cols[i]:
             f = st.file_uploader(f"Station {i+1}", type="csv", key=f"st_up_{i}")
             if f:
-                uploaded[i] = f  # store the file if user uploaded one
+                uploaded[i] = f
 
-    # Only proceed if at least 2 files are uploaded
     if len(uploaded) >= 2:
-        stations = {}  # dict of {station_name: cleaned_dataframe}
-        names = []  # ordered list of station names
+        stations = {}
+        names = []
 
-        # Read and clean each uploaded file
         for i, file in uploaded.items():
-            temp = clean_data(pd.read_csv(file))  # read CSV + clean
-            name = get_station_name(temp, file.name)  # detect station name
-            stations[name] = temp  # store with station name as key
-            names.append(name)  # track order
+            temp = clean_data(pd.read_csv(file))
+            name = get_station_name(temp, file.name)
+            stations[name] = temp
+            names.append(name)
 
-        st.success(f"Loaded: {', '.join(names)}")  # confirmation
+        st.success(f"Loaded: {', '.join(names)}")
 
-        # Summary metrics — one box per station showing total losts + worst shift
+        # Summary metrics per station
         st.subheader("Station Summary")
         mcols = st.columns(len(names))
         for idx, name in enumerate(names):
             shift_known = stations[name][stations[name]["Shift"] != "Unknown"]["Shift"]
             worst_shift = safe_top(shift_known) if len(shift_known) > 0 else "N/A"
             mcols[idx].metric(name, f"{len(stations[name])} lost")
-            mcols[idx].caption(f"Worst shift: {worst_shift}")  # show worst shift under each station
+            mcols[idx].caption(f"Worst shift: {worst_shift}")
 
-        # --- CLUSTER SWEEP PRIORITY (per station) ---
+        # Cluster sweep priority per station
         for name in names:
             cl_ranked = stations[name]["Cluster"].dropna().value_counts()
             if len(cl_ranked) > 0:
                 sweep_parts = [f"#{i+1} {cl} ({n})" for i, (cl, n) in enumerate(cl_ranked.head(3).items())]
                 st.info(f"🧹 **{name} Sweep Priority:** {' → '.join(sweep_parts)}")
 
-        # --- TABS (same 7 as single station, but with comparison views) ---
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
-            ["Overview", "Location", "Rankings", "DSP & Cycle", "Time", "Export", "Bridge"]
+        # --- TABS (8 tabs) ---
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+            ["Overview", "Location", "Rankings", "DSP & Cycle", "Shift", "Time", "Export", "Bridge"]
         )
 
-        # ==============================================================
-        # TAB 1: OVERVIEW COMPARE — totals, sizes, clusters side by side
-        # ==============================================================
+        # TAB 1: OVERVIEW COMPARE
         with tab1:
             st.caption("Compare totals, size, and clusters across stations.")
             view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="mc_ov")
 
             if view == "Chart":
-                # Bar chart: total losts per station
                 st.subheader("Total Lost by Station")
                 fig, ax = plt.subplots(figsize=CHART_FULL)
                 ax.bar(names, [len(stations[n]) for n in names], color=STATION_COLORS[:len(names)])
@@ -786,14 +723,13 @@ else:
                 plt.tight_layout()
                 st.pyplot(fig)
 
-                # Grouped bar chart: size breakdown per station
                 st.subheader("Size Breakdown by Station")
                 fig2, ax2 = plt.subplots(figsize=CHART_WIDE)
-                x = range(len(SIZE_ORDER))  # positions on x-axis
-                w = 0.8 / len(names)  # bar width depends on how many stations
+                x = range(len(SIZE_ORDER))
+                w = 0.8 / len(names)
                 for idx, name in enumerate(names):
                     counts = [len(stations[name][stations[name]["Size Category"] == s]) for s in SIZE_ORDER]
-                    offset = (idx - len(names)/2 + 0.5) * w  # offset bars so they sit side by side
+                    offset = (idx - len(names)/2 + 0.5) * w
                     ax2.bar([xi + offset for xi in x], counts, w, label=name, color=STATION_COLORS[idx])
                 ax2.set_xticks(x)
                 ax2.set_xticklabels(SIZE_ORDER, fontsize=7)
@@ -803,7 +739,6 @@ else:
                 plt.tight_layout()
                 st.pyplot(fig2)
 
-                # Individual cluster charts per station
                 st.subheader("Clusters per Station")
                 for idx, name in enumerate(names):
                     cl = stations[name]["Cluster"].dropna().value_counts()
@@ -814,11 +749,9 @@ else:
                 st.subheader("Totals")
                 st.dataframe(pd.DataFrame({"Station": names, "Total Lost": [len(stations[n]) for n in names]},
                                           index=range(1, len(names)+1)))
-
                 st.subheader("Size Breakdown")
                 sz = {n: [len(stations[n][stations[n]["Size Category"] == s]) for s in SIZE_ORDER] for n in names}
                 st.dataframe(pd.DataFrame(sz, index=SIZE_ORDER))
-
                 st.subheader("Clusters")
                 for name in names:
                     st.write(f"**{name}:**")
@@ -826,21 +759,17 @@ else:
                     if len(cl) > 0:
                         st.dataframe(make_table(cl, "Cluster", "Lost Parcels"))
 
-        # ==============================================================
-        # TAB 2: LOCATION COMPARE — cluster drill-down per station
-        # ==============================================================
+        # TAB 2: LOCATION COMPARE
         with tab2:
             st.caption("Drill into each station's cluster hotspots.")
             for idx, name in enumerate(names):
                 st.subheader(f"📍 {name}")
                 sdf = stations[name]
                 clusters = sorted(sdf["Cluster"].dropna().unique())
-
                 if clusters:
                     sel = st.selectbox(f"Cluster ({name}):", clusters, key=f"mc_cl_{idx}")
                     filt = sdf[sdf["Cluster"] == sel]
                     st.write(f"{len(filt)} parcels in Cluster {sel}")
-
                     ai = filt["Aisle"].dropna().value_counts().head(10)
                     if len(ai) > 0:
                         st.pyplot(plot_bar(ai, "Aisle", "Lost", f"{name} — Cluster {sel} Aisles",
@@ -853,14 +782,11 @@ else:
                     st.info(f"No cluster data for {name}.")
                 st.markdown("---")
 
-        # ==============================================================
-        # TAB 3: RANKINGS COMPARE — top 10 per station
-        # ==============================================================
+        # TAB 3: RANKINGS COMPARE
         with tab3:
             st.caption("Top 10 worst locations per station.")
             rank_by = st.selectbox("Rank by:", ["Sort Zone", "Aisle"], key="mc_rank")
             rank_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="mc_rank_v")
-
             for idx, name in enumerate(names):
                 data = stations[name][rank_by].dropna().value_counts().head(10)
                 if len(data) > 0:
@@ -871,9 +797,7 @@ else:
                         st.subheader(name)
                         st.dataframe(make_table(data, rank_by, "Lost Parcels"))
 
-        # ==============================================================
         # TAB 4: DSP & CYCLE COMPARE
-        # ==============================================================
         with tab4:
             st.caption("DSP and cycle comparison across stations.")
             dsp_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="mc_dsp_v")
@@ -884,8 +808,6 @@ else:
                     if len(dsp) > 0:
                         st.pyplot(plot_dsp(dsp, f"{name} — Worst DSPs",
                                            color=STATION_COLORS[idx], figsize=CHART_FULL))
-
-                # Grouped cycle comparison
                 st.subheader("Cycle Comparison")
                 all_cycles = sorted(set().union(*[stations[n]["Assigned Cycle"].dropna().unique() for n in names]))
                 if all_cycles:
@@ -906,56 +828,36 @@ else:
                     plt.tight_layout()
                     st.pyplot(fig)
             else:
-                # TABLE VIEW — alphabetical DSP order for easy lookup
                 for idx, name in enumerate(names):
                     st.subheader(name)
                     dsp = stations[name]["DSP Name"].dropna().value_counts()
                     if len(dsp) > 0:
                         st.write("**DSPs (alphabetical):**")
-                        dsp_alpha = dsp.sort_index()  # sort A→Z by DSP name
-                        st.dataframe(make_table(dsp_alpha, "DSP", "Lost Parcels"))
+                        st.dataframe(make_table(dsp.sort_index(), "DSP", "Lost Parcels"))
                     cy = stations[name]["Assigned Cycle"].dropna().value_counts()
                     if len(cy) > 0:
                         st.write("**Cycles:**")
                         st.dataframe(make_table(cy, "Cycle", "Lost Parcels"))
                     st.markdown("---")
 
-        # ==============================================================
-        # TAB 5: TIME COMPARE — shifts + day-of-week per station
-        # ==============================================================
+        # TAB 5: SHIFT COMPARE (NEW DEDICATED TAB)
         with tab5:
-            st.caption("Shift rankings and day-of-week patterns across stations.")
-
-            # --- SHIFT COMPARISON (new section) ---
-            st.subheader("⏱️ Shift Rankings by Station")
-
-            # Show shift leaderboard for each station
-            for idx, name in enumerate(names):
-                sdf = stations[name]
-                shift_known = sdf[sdf["Shift"] != "Unknown"]
-                total_st = len(sdf)
-
-                if len(shift_known) > 0:
-                    st.write(f"**{name}:**")
-                    shift_tbl = make_shift_table(sdf, total_st)  # ranked shift table
-                    st.dataframe(shift_tbl)
-
-                    # Small shift chart per station
-                    shift_data = shift_known["Shift"].value_counts()
-                    st.pyplot(plot_shift(shift_data, f"{name} — Shift Breakdown",
-                                         figsize=CHART_SMALL))
-                else:
-                    st.write(f"**{name}:** No shift data available.")
+            st.caption("Shift accountability — per station leaderboards and parcel-level verification.")
 
             # Grouped shift comparison chart (all stations on one chart)
-            st.subheader("Shift Comparison — All Stations")
+            st.subheader("⏱️ Shift Comparison — All Stations")
+
+            # Show shift definitions once at the top
+            st.caption("**Shift Definitions:** " +
+                       " | ".join([f"**{s}:** {d}" for s, d in SHIFT_DEFINITIONS.items()]))
+
+            # Grouped bar chart
             fig_sh, ax_sh = plt.subplots(figsize=CHART_FULL)
             x = range(len(SHIFT_ORDER))
             w = 0.8 / len(names)
             for idx, name in enumerate(names):
-                sdf = stations[name]
-                shift_data = sdf[sdf["Shift"] != "Unknown"]["Shift"].value_counts()
-                counts = [shift_data.get(s, 0) for s in SHIFT_ORDER]  # get count per shift
+                shift_data = stations[name][stations[name]["Shift"] != "Unknown"]["Shift"].value_counts()
+                counts = [shift_data.get(s, 0) for s in SHIFT_ORDER]
                 offset = (idx - len(names)/2 + 0.5) * w
                 ax_sh.bar([xi + offset for xi in x], counts, w, label=name, color=STATION_COLORS[idx])
             ax_sh.set_xticks(x)
@@ -967,33 +869,21 @@ else:
             plt.tight_layout()
             st.pyplot(fig_sh)
 
-            # --- SHIFT DRILL-DOWN (verify parcels per station per shift) ---
-            st.subheader("🔍 Verify Shift Parcels")
-            st.caption("Select a station and shift to see individual parcels + dispatch times.")
-            verify_station = st.selectbox("Station:", names, key="mc_verify_st")
-            verify_shifts = [s for s in SHIFT_ORDER if s in stations[verify_station][stations[verify_station]["Shift"] != "Unknown"]["Shift"].values]
-
-            if verify_shifts:
-                verify_shift = st.selectbox("Shift:", verify_shifts, key="mc_verify_shift")
-                verify_df = stations[verify_station][stations[verify_station]["Shift"] == verify_shift]
-                st.write(f"**{len(verify_df)} parcels on {verify_shift} shift at {verify_station}**")
-
-                verify_cols = ["Tracking ID", "Dispatch Time", "Cluster", "Aisle",
-                               "Sort Zone", "DSP Name", "Size Category"]
-                verify_cols = [c for c in verify_cols if c in stations[verify_station].columns]
-                display_vdf = verify_df[verify_cols].sort_values("Dispatch Time", ascending=True) if "Dispatch Time" in verify_cols else verify_df[verify_cols]
-                st.dataframe(display_vdf)
-            else:
-                st.info(f"No shift data available for {verify_station}.")
-
             st.markdown("---")
 
-            # --- DAY OF WEEK (existing section) ---
-            st.subheader("📅 Day of Week")
+            # Per-station shift leaderboards + parcel tables
+            for idx, name in enumerate(names):
+                st.subheader(f"📍 {name}")
+                sdf = stations[name]
+                render_shift_tab(sdf, len(sdf), get_date_range(sdf) if "Last Updated Time" in sdf.columns else "", key_prefix=f"mc_{idx}")
+                st.markdown("---")
+
+        # TAB 6: TIME COMPARE
+        with tab6:
+            st.caption("Day-of-week patterns across stations.")
             time_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="mc_time_v")
 
             if time_view == "Chart":
-                # Overlaid line chart
                 fig, ax = plt.subplots(figsize=CHART_FULL)
                 for idx, name in enumerate(names):
                     if "Day of Week" in stations[name].columns:
@@ -1021,28 +911,21 @@ else:
                         day_all[name] = stations[name]["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0).values
                 st.dataframe(pd.DataFrame(day_all, index=DAY_ORDER))
 
-        # ==============================================================
-        # TAB 6: EXPORT COMPARE — download per station or combined
-        # ==============================================================
-        with tab6:
+        # TAB 7: EXPORT COMPARE
+        with tab7:
             st.caption("Download individual or combined station data.")
-
             st.subheader("Individual Downloads")
             for name in names:
                 st.download_button(f"Download {name}", stations[name].to_csv(index=False),
                                    f"Lost_{name}_Cleaned.csv", "text/csv", key=f"dl_{name}")
-
             st.subheader("Combined Download")
             combined = pd.concat([stations[n].assign(Station_Name=n) for n in names], ignore_index=True)
             st.download_button("Download All Stations Combined", combined.to_csv(index=False),
                                "Lost_All_Stations_Combined.csv", "text/csv", key="dl_all")
 
-        # ==============================================================
-        # TAB 7: BRIDGE COMPARE — summary table + best vs worst
-        # ==============================================================
-        with tab7:
+        # TAB 8: BRIDGE COMPARE
+        with tab8:
             st.caption("Cross-station comparison summary.")
-
             st.subheader("Station Comparison")
             comp = []
             for name in names:
@@ -1060,18 +943,15 @@ else:
                 })
             st.dataframe(pd.DataFrame(comp, index=range(1, len(comp)+1)))
 
-            # Best vs worst
             st.subheader("Key Differences")
             best = min(names, key=lambda n: len(stations[n]))
             worst = max(names, key=lambda n: len(stations[n]))
             gap = len(stations[worst]) - len(stations[best])
             gap_pct = round(gap / len(stations[worst]) * 100, 1) if len(stations[worst]) > 0 else 0
-
             st.write(f"**Best:** {best} ({len(stations[best])} losts)")
             st.write(f"**Worst:** {worst} ({len(stations[worst])} losts)")
             st.write(f"**Gap:** {gap} parcels ({gap_pct}% difference)")
 
-            # Quick prompt
             st.subheader("Enhance with Quick")
             summaries = "\n".join([f"- {n}: {len(stations[n])} losts, worst cluster={safe_top(stations[n]['Cluster'])}, worst DSP={safe_top(stations[n]['DSP Name'])}, worst shift={safe_top(stations[n][stations[n]['Shift']!='Unknown']['Shift']) if len(stations[n][stations[n]['Shift']!='Unknown']) > 0 else 'N/A'}" for n in names])
             compare_prompt = f"""Compare these stations' lost parcel performance and suggest what {worst} can learn from {best}:
