@@ -1,518 +1,718 @@
-import streamlit as st
-import pandas as pd
-import matplotlib.pyplot as plt
+import streamlit as st  # web app framework
+import pandas as pd  # data manipulation (dataframes)
+import matplotlib.pyplot as plt  # chart generation
 
-st.set_page_config(page_title="SCC Lost Heatmap", page_icon="📦", layout="wide")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="SCC Lost Heatmap", page_icon="📦", layout="wide")  # wide layout, browser tab title
+st.title("SCC Lost Parcel Heatmap")  # main heading
+st.markdown("---")  # horizontal divider
 
-st.title("SCC Lost Parcel Heatmap")
-st.markdown("---")
+# --- CONSTANTS ---
+STATION_COLORS = ["steelblue", "orange", "green", "red", "purple"]  # one colour per station (up to 5)
+SIZE_ORDER = ["Small", "Medium", "Small Oversize", "Large Oversize", "Unknown"]  # standard size categories
+DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]  # week order
+SENSITIVE_COLS = [  # columns to auto-remove (personal data)
+    "Last Scan By", "Driver Id", "Holder Name", "City", "Postal",
+    "Province", "Ordering Order ID", "Order Amount", "Receivable Amount",
+    "Payment Method", "District", "Scheduled Delivery End Time"
+]
+REQUIRED_COLS = [  # columns the app needs to function
+    "Tracking ID", "Sort Zone", "Aisle", "Cluster",
+    "Package Length", "Package Width", "Package Height",
+    "DSP Name", "Assigned Cycle", "Last Updated Time"
+]
 
-uploaded_file = st.file_uploader("Upload SCC export as a .csv file please to generate the heatmap", type="csv")
 
-if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-
-    # Sensitive Data Check --------------------------------------------
-    sensitive_columns = [
-        "Last Scan By", "Driver Id", "Holder Name", "City", "Postal",
-        "Province", "Ordering Order ID", "Order Amount", "Receivable Amount",
-        "Payment Method", "District", "Scheduled Delivery End Time"
-    ]
-    found_sensitive = [col for col in sensitive_columns if col in df.columns]
-
-    if found_sensitive:
-        st.warning(f"Sensitive Information Column Titles Uploaded: {', '.join(found_sensitive)}")
-        st.info("These columns have been automatically removed")
-        df = df.drop(columns=found_sensitive)
-
-    # Column Validation -----------------------------------------------
-    required_columns = [
-        "Tracking ID", "Sort Zone", "Aisle", "Cluster",
-        "Package Length", "Package Width", "Package Height",
-        "DSP Name", "Assigned Cycle", "Last Updated Time"
-    ]
-    missing = [col for col in required_columns if col not in df.columns]
-
-    if missing:
-        st.error("Missing required columns:")
-        for col in missing:
-            st.write(f"   - {col}")
-        st.info("Please check your SCC export filters include these fields, then re-upload.")
+# --- HELPER FUNCTIONS ---
+def get_size(longest):
+    """Classify a parcel by its longest side into Amazon UK size tiers"""
+    if pd.isna(longest):
+        return "Unknown"  # no dimension data
+    elif longest <= 35:
+        return "Small"
+    elif longest <= 45:
+        return "Medium"
+    elif longest <= 61:
+        return "Small Oversize"
     else:
-        st.success(f"Data loaded - {df.shape[0]} packages ready for analysis.")
+        return "Large Oversize"
 
-        if len(df) == 0:
-            st.warning("The uploaded file has no data rows. Please check your export.")
+
+def clean_data(df):
+    """Clean one station's data: remove sensitive cols, fix dimensions, add size + day"""
+    df = df.drop(columns=[c for c in SENSITIVE_COLS if c in df.columns])  # remove sensitive columns
+
+    # Fix package dimensions (remove "cm" text, convert to numbers)
+    for col in ["Package Length", "Package Width", "Package Height"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.replace(" cm", "").str.replace("cm", "")  # strip unit text
+            df[col] = pd.to_numeric(df[col], errors="coerce")  # convert to float, NaN if invalid
+
+    # Calculate longest side and size category
+    dim_cols = ["Package Length", "Package Width", "Package Height"]
+    if all(c in df.columns for c in dim_cols):
+        df["Longest Side"] = df[dim_cols].max(axis=1)  # longest of the 3 dimensions
+    else:
+        df["Longest Side"] = float("nan")  # no dimensions available
+
+    df["Size Category"] = df["Longest Side"].apply(get_size)  # apply size classification
+
+    # Parse timestamps and extract day of week
+    if "Last Updated Time" in df.columns:
+        df["Last Updated Time"] = pd.to_datetime(df["Last Updated Time"], errors="coerce")  # parse date
+        df["Day of Week"] = df["Last Updated Time"].dt.day_name()  # e.g. "Monday"
+
+    return df
+
+
+def get_station_name(df, filename):
+    """Get station name from Station column, or fall back to filename"""
+    if "Station" in df.columns and len(df["Station"].dropna()) > 0:
+        return df["Station"].dropna().iloc[0]  # use first non-null station value
+    return filename.replace(".csv", "").replace("_", " ").strip()[:20]  # clean up filename as fallback
+
+
+def get_date_range(df):
+    """Return formatted date range string from the data"""
+    start = df["Last Updated Time"].min().strftime("%d %b %Y")  # earliest date
+    end = df["Last Updated Time"].max().strftime("%d %b %Y")  # latest date
+    return start if start == end else f"{start} - {end}"  # single day or range
+
+
+def safe_top(series, n=1):
+    """Safely get top value(s) from a series, returns 'N/A' if empty"""
+    counts = series.dropna().value_counts()  # count occurrences, ignore NaN
+    if len(counts) == 0:
+        return "N/A" if n == 1 else pd.Series(dtype="object")  # empty fallback
+    return counts.index[0] if n == 1 else counts.head(n)  # top 1 or top N
+
+
+def plot_bar(data, xlabel, ylabel, title, color="steelblue", horizontal=False, rotate=0, figsize=(12, 5)):
+    """Reusable bar chart function — avoids repeating matplotlib boilerplate"""
+    fig, ax = plt.subplots(figsize=figsize)
+    if horizontal:
+        ax.barh(data.index, data.values, color=color)  # horizontal bars
+        ax.invert_yaxis()  # highest at top
+    else:
+        ax.bar(data.index, data.values, color=color)  # vertical bars
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    plt.xticks(rotation=rotate, ha="right" if rotate else "center")  # rotate labels if needed
+    plt.tight_layout()  # prevent label cutoff
+    return fig
+
+
+def make_table(series, col1_name, col2_name):
+    """Convert a value_counts series into a numbered dataframe for display"""
+    tbl = series.reset_index()  # convert index to column
+    tbl.columns = [col1_name, col2_name]  # rename columns
+    tbl.index = range(1, len(tbl) + 1)  # start numbering from 1
+    return tbl
+
+
+# --- MODE TOGGLE ---
+mode = st.radio("Mode:", ["Single Station", "Multi-Station Compare"], horizontal=True, key="mode_toggle")
+
+
+# =====================================================================
+# SINGLE STATION MODE
+# =====================================================================
+if mode == "Single Station":
+
+    uploaded_file = st.file_uploader("Upload SCC export (.csv)", type="csv")  # file upload widget
+
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)  # read CSV into dataframe
+
+        # Show warning if sensitive columns were found
+        found_sensitive = [c for c in SENSITIVE_COLS if c in df.columns]
+        if found_sensitive:
+            st.warning(f"Sensitive columns found and removed: {', '.join(found_sensitive)}")
+
+        df = clean_data(df)  # apply all cleaning steps
+
+        # Check required columns exist
+        missing = [c for c in REQUIRED_COLS if c not in df.columns]
+        if missing:
+            st.error(f"Missing required columns: {', '.join(missing)}")
+            st.info("Check your SCC export includes these fields, then re-upload.")
+        elif len(df) == 0:
+            st.warning("File has no data rows.")
         else:
+            st.success(f"Data loaded — {len(df)} packages ready.")
 
-            # Parcel Size Grouping ------------------------------------------
-            for col in ["Package Length", "Package Width", "Package Height"]:
-                df[col] = df[col].astype(str).str.replace(" cm", "").str.replace("cm", "")  # force text, remove " cm"
-                df[col] = pd.to_numeric(df[col], errors="coerce")  # convert to number, NaN if fails
+            date_range_text = get_date_range(df)  # e.g. "01 Jul 2025 - 07 Jul 2025"
 
-            df["Longest Side"] = df[["Package Length", "Package Width", "Package Height"]].max(axis=1)
-
-            def get_size(longest):
-                if pd.isna(longest):
-                    return "Unknown"
-                elif longest <= 35:
-                    return "Small"
-                elif longest <= 45:
-                    return "Medium"
-                elif longest <= 61:
-                    return "Small Oversize"
-                else:
-                    return "Large Oversize"
-
-            df["Size Category"] = df["Longest Side"].apply(get_size)
-
-            # Date range ---------------------------------------------------
-            df["Last Updated Time"] = pd.to_datetime(df["Last Updated Time"], errors="coerce")
-            start_date = df["Last Updated Time"].min().strftime("%d %b %Y")
-            end_date = df["Last Updated Time"].max().strftime("%d %b %Y")
-
-            if start_date == end_date:
-                date_range_text = f"{start_date}"
-            else:
-                date_range_text = f"{start_date} - {end_date}"
-
-            # Summary Stats -------------------------------------------------
+            # --- SUMMARY METRICS ---
             st.subheader(f"Quick Summary ({date_range_text})")
-
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Lost", len(df))
-
-            if len(df["Cluster"].dropna()) > 0:
-                col2.metric("Worst Cluster", df["Cluster"].value_counts().index[0])
-            else:
-                col2.metric("Worst Cluster", "N/A")
-
-            if len(df["Aisle"].dropna()) > 0:
-                col3.metric("Worst Aisle", df["Aisle"].value_counts().index[0])
-            else:
-                col3.metric("Worst Aisle", "N/A")
-
-            if len(df["DSP Name"].dropna()) > 0:
-                top_dsp_name = df["DSP Name"].dropna().value_counts().index[0]
-                col4.metric("Worst DSP", top_dsp_name[:15])
-            else:
-                col4.metric("Worst DSP", "N/A")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total Lost", len(df))
+            c2.metric("Worst Cluster", safe_top(df["Cluster"]))
+            c3.metric("Worst Aisle", safe_top(df["Aisle"]))
+            c4.metric("Top DSP", str(safe_top(df["DSP Name"]))[:15])  # truncate long DSP names
 
             if len(df) < 5:
-                st.info("Small dataset — analysis may be less meaningful. Consider uploading a full week.")
+                st.info("Small dataset — consider uploading a full week.")
 
-            # Tabs ----------------------------------------------------------
+            # --- TABS ---
             tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
                 ["Overview", "Location", "Rankings", "DSP & Cycle", "Time", "Export", "Bridge"]
             )
 
-            # TAB 1: OVERVIEW -----------------------------------------------
+            # TAB 1: OVERVIEW
             with tab1:
-                st.caption("Size breakdown of lost parcels and summary by cluster.")
-                overview_display = st.radio("Display as:", ["Table", "Chart"], horizontal=True, key="overview_display")
+                st.caption("Size breakdown and cluster summary.")
+                view = st.radio("Display:", ["Table", "Chart"], horizontal=True, key="ov_view")
 
-                if overview_display == "Table":
-                    st.subheader("Lost Parcel Size Breakdown")
-                    st.write(df["Size Category"].value_counts())
-
-                    st.subheader("Lost Parcels by Cluster and Size")
-                    summary_tbl = df.groupby(["Cluster", "Size Category"]).size().unstack(fill_value=0)
-                    summary_tbl["Total"] = summary_tbl.sum(axis=1)
-                    st.dataframe(summary_tbl)
+                if view == "Table":
+                    st.subheader("Size Breakdown")
+                    st.write(df["Size Category"].value_counts())  # simple count per size
+                    st.subheader("Cluster × Size")
+                    tbl = df.groupby(["Cluster", "Size Category"]).size().unstack(fill_value=0)  # pivot table
+                    tbl["Total"] = tbl.sum(axis=1)  # add total column
+                    st.dataframe(tbl)
                 else:
-                    st.subheader("Lost Parcels by Size")
+                    # Size bar chart
                     size_counts = df["Size Category"].value_counts()
                     if len(size_counts) > 0:
-                        fig_ov, ax_ov = plt.subplots(figsize=(8, 4))
                         colors = ["green", "orange", "red", "darkred", "grey"][:len(size_counts)]
-                        ax_ov.bar(size_counts.index, size_counts.values, color=colors)
-                        ax_ov.set_xlabel("Size Category")
-                        ax_ov.set_ylabel("Lost Parcels")
-                        ax_ov.set_title(f"Lost Parcels by Size ({date_range_text})")
-                        plt.xticks(rotation=0, ha="center")
-                        plt.tight_layout()
-                        st.pyplot(fig_ov)
+                        fig = plot_bar(size_counts, "Size Category", "Lost Parcels",
+                                       f"Lost by Size ({date_range_text})", color=colors, figsize=(8, 4))
+                        st.pyplot(fig)
 
-                    st.subheader("Lost Parcels by Cluster")
-                    cluster_counts = df["Cluster"].dropna().value_counts()
-                    if len(cluster_counts) > 0:
-                        fig_cl, ax_cl = plt.subplots(figsize=(8, 4))
-                        ax_cl.bar(cluster_counts.index, cluster_counts.values, color="steelblue")
-                        ax_cl.set_xlabel("Cluster")
-                        ax_cl.set_ylabel("Lost Parcels")
-                        ax_cl.set_title(f"Lost Parcels by Cluster ({date_range_text})")
-                        plt.xticks(rotation=0, ha="center")
-                        plt.tight_layout()
-                        st.pyplot(fig_cl)
+                    # Cluster bar chart
+                    cl_counts = df["Cluster"].dropna().value_counts()
+                    if len(cl_counts) > 0:
+                        st.pyplot(plot_bar(cl_counts, "Cluster", "Lost Parcels",
+                                           f"Lost by Cluster ({date_range_text})", figsize=(8, 4)))
 
-            # TAB 2: LOCATION -----------------------------------------------
+            # TAB 2: LOCATION
             with tab2:
-                st.caption("Drill into a cluster to see which aisles or zones have the most losts. Filter by package size to spot problem areas.")
+                st.caption("Drill into a cluster to see aisle/zone hotspots.")
+                clusters = sorted(df["Cluster"].dropna().unique())
 
-                clusters_available = sorted(df["Cluster"].dropna().unique())
-                if len(clusters_available) > 0:
-                    selected_cluster = st.selectbox("Select Cluster:", clusters_available, key="cluster_select")
-                    filtered_df = df[df["Cluster"] == selected_cluster]
-                    st.write(f"Showing {len(filtered_df)} lost parcels in Cluster {selected_cluster}")
+                if clusters:
+                    sel_cluster = st.selectbox("Cluster:", clusters, key="cl_sel")
+                    filt = df[df["Cluster"] == sel_cluster]  # filter to selected cluster
+                    st.write(f"{len(filt)} parcels in Cluster {sel_cluster}")
 
-                    view_detail = st.selectbox("View by:", ["Aisle", "Sort Zone"], key="view_select")
-                    location_display = st.radio("Display as:", ["Chart", "Table"], horizontal=True, key="location_display")
+                    view_by = st.selectbox("View by:", ["Aisle", "Sort Zone"], key="view_by")
+                    loc_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="loc_view")
+                    loc_data = filt[view_by].dropna().value_counts()
 
-                    chart_data = filtered_df[view_detail].dropna().value_counts()
+                    if loc_view == "Chart":
+                        if len(loc_data) > 0:
+                            rot = 45 if view_by == "Sort Zone" else 0  # rotate zone labels
+                            st.pyplot(plot_bar(loc_data, view_by, "Lost Parcels",
+                                               f"Cluster {sel_cluster} by {view_by}", rotate=rot, figsize=(14, 5)))
 
-                    if location_display == "Chart":
-                        if len(chart_data) > 0:
-                            fig, ax = plt.subplots(figsize=(14, 5))
-                            ax.bar(chart_data.index, chart_data.values)
-                            ax.set_xlabel(view_detail)
-                            ax.set_ylabel("Lost Parcels")
-                            ax.set_title(f"Lost Parcels in Cluster {selected_cluster} by {view_detail}")
-                            if view_detail == "Sort Zone":
-                                plt.xticks(rotation=45, ha="right")
-                            else:
-                                plt.xticks(rotation=0, ha="center")
-                            plt.tight_layout()
-                            st.pyplot(fig)
+                        # Size filter within cluster
+                        st.subheader(f"Size by Aisle in Cluster {sel_cluster}")
+                        sel_size = st.selectbox("Size:", sorted(df["Size Category"].dropna().unique()), key="sz_sel")
+                        size_filt = filt[filt["Size Category"] == sel_size]
+                        st.write(f"{len(size_filt)} '{sel_size}' parcels")
+                        sz_data = size_filt["Aisle"].dropna().value_counts()
+                        if len(sz_data) > 0:
+                            st.pyplot(plot_bar(sz_data, "Aisle", "Lost Parcels",
+                                               f"'{sel_size}' in Cluster {sel_cluster}", color="red", figsize=(12, 5)))
                         else:
-                            st.info("No location data available for this cluster.")
-
-                        st.subheader(f"Package Size by Aisle in Cluster {selected_cluster}")
-                        selected_size = st.selectbox("Select Size Category:", sorted(df["Size Category"].dropna().unique()), key="size_select")
-                        size_df = filtered_df[filtered_df["Size Category"] == selected_size]
-                        st.write(f"{len(size_df)} '{selected_size}' parcels lost in Cluster {selected_cluster}")
-                        size_zone_data = size_df["Aisle"].dropna().value_counts()
-
-                        if len(size_zone_data) > 0:
-                            fig6, ax6 = plt.subplots(figsize=(12, 5))
-                            ax6.bar(size_zone_data.index, size_zone_data.values, color="red")
-                            ax6.set_xlabel("Aisle")
-                            ax6.set_ylabel("Lost Parcels")
-                            ax6.set_title(f"'{selected_size}' Parcels Lost by Aisle in Cluster {selected_cluster}")
-                            plt.xticks(rotation=0, ha="center")
-                            plt.tight_layout()
-                            st.pyplot(fig6)
-                        else:
-                            st.info(f"No '{selected_size}' parcels lost in Cluster {selected_cluster}")
+                            st.info(f"No '{sel_size}' parcels in this cluster.")
                     else:
-                        if len(chart_data) > 0:
-                            st.subheader(f"Lost Parcels by {view_detail}")
-                            location_table = chart_data.reset_index()
-                            location_table.columns = ["Location", "Lost Parcels"]
-                            location_table.index = range(1, len(location_table) + 1)
-                            st.dataframe(location_table)
-
-                        st.subheader(f"Package Size Breakdown in Cluster {selected_cluster}")
-                        cluster_size_tbl = filtered_df.groupby(["Aisle", "Size Category"]).size().unstack(fill_value=0)
-                        cluster_size_tbl["Total"] = cluster_size_tbl.sum(axis=1)
-                        st.dataframe(cluster_size_tbl)
+                        if len(loc_data) > 0:
+                            st.dataframe(make_table(loc_data, "Location", "Lost Parcels"))
+                        st.subheader("Size Breakdown")
+                        sz_tbl = filt.groupby(["Aisle", "Size Category"]).size().unstack(fill_value=0)
+                        sz_tbl["Total"] = sz_tbl.sum(axis=1)
+                        st.dataframe(sz_tbl)
                 else:
                     st.info("No cluster data available.")
 
-            # TAB 3: RANKINGS -----------------------------------------------
+            # TAB 3: RANKINGS
             with tab3:
-                st.caption("See the worst performing locations ranked by number of lost parcels.")
-
-                rank_view = st.selectbox("Rank by:", ["Sort Zone", "Aisle"], key="rank_select")
-                rank_display = st.radio("Display as:", ["Chart", "Table"], horizontal=True, key="rank_display")
-
-                rank_data = df[rank_view].dropna().value_counts().head(10)
+                st.caption("Top 10 worst locations.")
+                rank_by = st.selectbox("Rank by:", ["Sort Zone", "Aisle"], key="rank_sel")
+                rank_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="rank_view")
+                rank_data = df[rank_by].dropna().value_counts().head(10)
 
                 if len(rank_data) > 0:
-                    if rank_display == "Chart":
-                        fig8, ax8 = plt.subplots(figsize=(12, 5))
-                        ax8.barh(rank_data.index, rank_data.values, color="darkred")
-                        ax8.set_xlabel("Lost Parcels")
-                        ax8.set_ylabel(rank_view)
-                        ax8.set_title(f"Top 10 {rank_view}s with Most Lost Parcels ({date_range_text})")
-                        ax8.invert_yaxis()
-                        plt.tight_layout()
-                        st.pyplot(fig8)
+                    if rank_view == "Chart":
+                        st.pyplot(plot_bar(rank_data, "Lost Parcels", rank_by,
+                                           f"Top 10 {rank_by}s ({date_range_text})", color="darkred", horizontal=True))
                     else:
-                        rank_table = rank_data.reset_index()
-                        rank_table.columns = ["Location", "Lost Parcels"]
-                        rank_table.index = range(1, len(rank_table) + 1)
-                        st.dataframe(rank_table)
+                        st.dataframe(make_table(rank_data, rank_by, "Lost Parcels"))
                 else:
-                    st.info("No location data available for ranking.")
+                    st.info("No data available.")
 
-            # TAB 4: DSP & CYCLE --------------------------------------------
+            # TAB 4: DSP & CYCLE
             with tab4:
-                st.caption("See which DSPs lose the most parcels and compare performance across dispatch cycles.")
-
-                dsp_display = st.radio("Display as:", ["Chart", "Table"], horizontal=True, key="dsp_display")
-
+                st.caption("DSP performance and cycle distribution.")
+                dsp_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="dsp_view")
                 dsp_data = df["DSP Name"].dropna().value_counts()
                 cycle_data = df["Assigned Cycle"].dropna().value_counts()
 
-                if dsp_display == "Chart":
-                    st.subheader(f"Lost Parcels by DSP ({date_range_text})")
+                if dsp_view == "Chart":
                     if len(dsp_data) > 0:
-                        fig2, ax2 = plt.subplots(figsize=(12, 5))
-                        ax2.bar(dsp_data.index, dsp_data.values, color="orange")
-                        ax2.set_xlabel("DSP")
-                        ax2.set_ylabel("Lost Parcels")
-                        ax2.set_title(f"Lost Parcels by DSP ({date_range_text})")
-                        plt.xticks(rotation=45, ha="right")
-                        plt.tight_layout()
-                        st.pyplot(fig2)
-                    else:
-                        st.info("No DSP data available.")
-
-                    st.subheader(f"Lost Parcels by Cycle ({date_range_text})")
+                        st.pyplot(plot_bar(dsp_data, "DSP", "Lost Parcels",
+                                           f"Lost by DSP ({date_range_text})", color="orange", rotate=45))
                     if len(cycle_data) > 0:
-                        fig4, ax4 = plt.subplots(figsize=(10, 5))
-                        ax4.bar(cycle_data.index, cycle_data.values, color="purple")
-                        ax4.set_xlabel("Cycle")
-                        ax4.set_ylabel("Lost Parcels")
-                        ax4.set_title(f"Lost Parcels by Cycle ({date_range_text})")
-                        plt.xticks(rotation=0, ha="center")
-                        plt.tight_layout()
-                        st.pyplot(fig4)
-                    else:
-                        st.info("No cycle data available.")
+                        st.pyplot(plot_bar(cycle_data, "Cycle", "Lost Parcels",
+                                           f"Lost by Cycle ({date_range_text})", color="purple", figsize=(10, 5)))
                 else:
-                    st.subheader(f"Lost Parcels by DSP ({date_range_text})")
                     if len(dsp_data) > 0:
-                        dsp_table = dsp_data.reset_index()
-                        dsp_table.columns = ["DSP", "Lost Parcels"]
-                        dsp_table.index = range(1, len(dsp_table) + 1)
-                        st.dataframe(dsp_table)
-                    else:
-                        st.info("No DSP data available.")
-
-                    st.subheader(f"Lost Parcels by Cycle ({date_range_text})")
+                        st.subheader("DSP")
+                        st.dataframe(make_table(dsp_data, "DSP", "Lost Parcels"))
                     if len(cycle_data) > 0:
-                        cycle_table = cycle_data.reset_index()
-                        cycle_table.columns = ["Cycle", "Lost Parcels"]
-                        cycle_table.index = range(1, len(cycle_table) + 1)
-                        st.dataframe(cycle_table)
-                    else:
-                        st.info("No cycle data available.")
+                        st.subheader("Cycle")
+                        st.dataframe(make_table(cycle_data, "Cycle", "Lost Parcels"))
 
-            # TAB 5: TIME ---------------------------------------------------
+            # TAB 5: TIME
             with tab5:
-                st.caption("See which days of the week have the most losts. Select a day to view individual tracking IDs.")
+                st.caption("Day-of-week patterns and tracking ID lookup.")
+                day_data = df["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)  # force Mon-Sun order
+                time_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="time_view")
 
-                df["Day of Week"] = df["Last Updated Time"].dt.day_name()
-                day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-                day_data = df["Day of Week"].dropna().value_counts().reindex(day_order, fill_value=0)
-
-                time_display = st.radio("Display as:", ["Chart", "Table"], horizontal=True, key="time_display")
-
-                if time_display == "Chart":
-                    st.subheader(f"Lost Parcels by Day of Week ({date_range_text})")
-                    fig3, ax3 = plt.subplots(figsize=(10, 5))
-                    ax3.bar(day_data.index, day_data.values, color="green")
-                    ax3.set_xlabel("Day of Week")
-                    ax3.set_ylabel("Lost Parcels")
-                    ax3.set_title(f"Lost Parcels by Day of Week ({date_range_text})")
-                    plt.xticks(rotation=0, ha="center")
-                    plt.tight_layout()
-                    st.pyplot(fig3)
+                if time_view == "Chart":
+                    st.pyplot(plot_bar(day_data, "Day", "Lost Parcels",
+                                       f"Lost by Day ({date_range_text})", color="green", figsize=(10, 5)))
                 else:
-                    st.subheader(f"Lost Parcels by Day of Week ({date_range_text})")
-                    day_table = day_data.reset_index()
-                    day_table.columns = ["Day", "Lost Parcels"]
-                    day_table.index = range(1, len(day_table) + 1)
-                    st.dataframe(day_table)
+                    st.dataframe(make_table(day_data, "Day", "Lost Parcels"))
 
-                st.subheader("Lost Parcel Details by Day")
-                available_days = [d for d in day_order if d in df["Day of Week"].values]
-                if len(available_days) > 0:
-                    selected_day = st.selectbox("Select Day:", available_days, key="day_select")
-                    day_df = df[df["Day of Week"] == selected_day]
-                    st.write(f"{len(day_df)} parcels lost on {selected_day}")
-                    display_cols = [col for col in ["Tracking ID", "Cluster", "Aisle", "Sort Zone", "DSP Name", "Size Category"] if col in df.columns]
-                    st.dataframe(day_df[display_cols])
-                else:
-                    st.info("No day data available.")
+                # Day drill-down
+                st.subheader("Parcel Details by Day")
+                available_days = [d for d in DAY_ORDER if d in df["Day of Week"].values]  # only days with data
+                if available_days:
+                    sel_day = st.selectbox("Day:", available_days, key="day_sel")
+                    day_df = df[df["Day of Week"] == sel_day]  # filter to selected day
+                    st.write(f"{len(day_df)} parcels on {sel_day}")
+                    show_cols = [c for c in ["Tracking ID", "Cluster", "Aisle", "Sort Zone", "DSP Name", "Size Category"] if c in df.columns]
+                    st.dataframe(day_df[show_cols])  # show relevant columns only
 
-            # TAB 6: EXPORT -------------------------------------------------
+            # TAB 6: EXPORT
             with tab6:
-                st.caption("Download the cleaned data with sensitive information removed and size categories added.")
+                st.caption("Download cleaned data.")
+                st.download_button("Download CSV", df.to_csv(index=False),
+                                   "Lost_Parcels_Cleaned.csv", "text/csv")  # one-click download
 
-                st.subheader("Export Data")
-                csv = df.to_csv(index=False)
-
-                st.download_button(
-                    label="Download cleaned data as CSV",
-                    data=csv,
-                    file_name="Lost_Parcels_Cleaned.csv",
-                    mime="text/csv"
-                )
-
-            # TAB 7: BRIDGE -------------------------------------------------
+            # TAB 7: BRIDGE
             with tab7:
-                st.caption("Auto-generates a lost parcels bridge draft. Copy the Quick prompt for AI-enhanced action plans.")
+                st.caption("Auto-generated bridge with dynamic action plans.")
+                total = len(df)
 
-                # --- CALCULATE KEY STATS ---
-                total_lost = len(df)
-
-                cluster_counts = df["Cluster"].dropna().value_counts()
-                if len(cluster_counts) > 0:
-                    worst_cluster = cluster_counts.index[0]
-                    worst_cluster_count = cluster_counts.values[0]
-                    worst_cluster_pct = round(worst_cluster_count / total_lost * 100, 1)
-                else:
-                    worst_cluster = "N/A"
-                    worst_cluster_count = 0
-                    worst_cluster_pct = 0
-
-                aisle_counts = df["Aisle"].dropna().value_counts()
-                if len(aisle_counts) > 0:
-                    worst_aisle = aisle_counts.index[0]
-                    worst_aisle_count = aisle_counts.values[0]
-                    avg_aisle_count = aisle_counts.mean()
-                else:
-                    worst_aisle = "N/A"
-                    worst_aisle_count = 0
-                    avg_aisle_count = 1
-
+                # Gather key stats
+                cl_counts = df["Cluster"].dropna().value_counts()
+                ai_counts = df["Aisle"].dropna().value_counts()
                 dsp_counts = df["DSP Name"].dropna().value_counts()
-                if len(dsp_counts) > 0:
-                    worst_dsp = dsp_counts.index[0]
-                    worst_dsp_count = dsp_counts.values[0]
-                    avg_dsp_count = dsp_counts.mean()
-                    worst_dsp_multiple = round(worst_dsp_count / avg_dsp_count, 1) if avg_dsp_count > 0 else 1.0
-                else:
-                    worst_dsp = "N/A"
-                    worst_dsp_count = 0
-                    worst_dsp_multiple = 1.0
+                sz_counts = df["Size Category"].value_counts()
+                cy_counts = df["Assigned Cycle"].dropna().value_counts()
+                day_counts = df["Day of Week"].dropna().value_counts()
 
-                size_counts_bridge = df["Size Category"].value_counts()
-                worst_size = size_counts_bridge.index[0] if len(size_counts_bridge) > 0 else "N/A"
-                worst_size_count = size_counts_bridge.values[0] if len(size_counts_bridge) > 0 else 0
+                # Safe stat extraction
+                w_cluster = cl_counts.index[0] if len(cl_counts) > 0 else "N/A"
+                w_cluster_n = cl_counts.values[0] if len(cl_counts) > 0 else 0
+                w_cluster_pct = round(w_cluster_n / total * 100, 1) if total > 0 else 0
 
-                cycle_counts_bridge = df["Assigned Cycle"].dropna().value_counts()
-                top_cycle = cycle_counts_bridge.index[0] if len(cycle_counts_bridge) > 0 else "N/A"
-                top_cycle_count = cycle_counts_bridge.values[0] if len(cycle_counts_bridge) > 0 else 0
+                w_aisle = ai_counts.index[0] if len(ai_counts) > 0 else "N/A"
+                w_aisle_n = ai_counts.values[0] if len(ai_counts) > 0 else 0
+                avg_aisle = ai_counts.mean() if len(ai_counts) > 0 else 1
 
-                day_counts_bridge = df["Day of Week"].dropna().value_counts()
-                worst_day = day_counts_bridge.index[0] if len(day_counts_bridge) > 0 else "N/A"
-                worst_day_count = day_counts_bridge.values[0] if len(day_counts_bridge) > 0 else 0
+                w_dsp = dsp_counts.index[0] if len(dsp_counts) > 0 else "N/A"
+                w_dsp_n = dsp_counts.values[0] if len(dsp_counts) > 0 else 0
+                avg_dsp = dsp_counts.mean() if len(dsp_counts) > 0 else 1
+                dsp_mult = round(w_dsp_n / avg_dsp, 1) if avg_dsp > 0 else 1.0
 
-                # --- DAILY BREAKDOWN ---
-                df["Date"] = df["Last Updated Time"].dt.strftime("%d/%m")
-                daily_counts = df.groupby("Date").size()
-                daily_lines = "\n".join([f"{date} - {count} lost" for date, count in daily_counts.items()])
+                w_size = sz_counts.index[0] if len(sz_counts) > 0 else "N/A"
+                w_size_n = sz_counts.values[0] if len(sz_counts) > 0 else 0
+                top_cycle = cy_counts.index[0] if len(cy_counts) > 0 else "N/A"
+                top_cycle_n = cy_counts.values[0] if len(cy_counts) > 0 else 0
+                w_day = day_counts.index[0] if len(day_counts) > 0 else "N/A"
+                w_day_n = day_counts.values[0] if len(day_counts) > 0 else 0
 
-                # --- TOP 3 CLUSTERS WITH TOP 3 AISLES ---
-                top_clusters = cluster_counts.head(3)
+                # Daily breakdown
+                df["Date"] = df["Last Updated Time"].dt.strftime("%d/%m")  # short date format
+                daily = df.groupby("Date").size()  # count per day
+                daily_lines = "\n".join([f"{d} - {n} lost" for d, n in daily.items()])
+
+                # Top 3 clusters with their top 3 aisles
                 cluster_details = ""
-                for cluster_name, cluster_count in top_clusters.items():
-                    cluster_pct = round(cluster_count / total_lost * 100, 1)
-                    cluster_aisles = df[df["Cluster"] == cluster_name]["Aisle"].dropna().value_counts().head(3)
-                    aisle_list = ", ".join([f"{aisle} ({count})" for aisle, count in cluster_aisles.items()])
-                    cluster_details += f"  Cluster {cluster_name}: {cluster_count} parcels ({cluster_pct}%) — Top aisles: {aisle_list}\n"
+                for cl_name, cl_n in cl_counts.head(3).items():
+                    pct = round(cl_n / total * 100, 1)
+                    top_aisles = df[df["Cluster"] == cl_name]["Aisle"].dropna().value_counts().head(3)
+                    aisles_str = ", ".join([f"{a} ({n})" for a, n in top_aisles.items()])
+                    cluster_details += f"  Cluster {cl_name}: {cl_n} ({pct}%) — Aisles: {aisles_str}\n"
 
-                # --- TOP 3 DSPs ---
-                top_dsps = dsp_counts.head(3)
-                dsp_lines = "\n".join([f"  {dsp}: {count} parcels ({round(count/total_lost*100,1)}%)" for dsp, count in top_dsps.items()])
+                dsp_lines = "\n".join([f"  {d}: {n} ({round(n/total*100,1)}%)" for d, n in dsp_counts.head(3).items()])
+                size_lines = "\n".join([f"  {s}: {n}" for s, n in sz_counts.items()])
 
-                # --- SIZE BREAKDOWN ---
-                size_lines = "\n".join([f"  {size}: {count}" for size, count in size_counts_bridge.items()])
-
-                # --- STATE BREAKDOWN ---
+                # State breakdown (if column exists)
                 if "State" in df.columns:
-                    state_breakdown = df["State"].dropna().value_counts()
-                    state_lines = "\n".join([f"  {state}: {count}" for state, count in state_breakdown.items()])
+                    state_lines = "\n".join([f"  {s}: {n}" for s, n in df["State"].dropna().value_counts().items()])
                 else:
-                    state_lines = "  (State data not included in export)"
+                    state_lines = "  (Not in export)"
 
-                # --- DYNAMIC ACTION PLANS ---
-                # These change based on actual patterns in the data
+                # --- DYNAMIC ACTIONS ---
                 actions = []
+                ac = lambda txt: actions.append(f"AC{len(actions)+1}: {txt}")  # shorthand to add action
 
-                # Pattern: One cluster dominates (>40%)
-                if worst_cluster_pct > 40:
-                    actions.append(f"AC{len(actions)+1}: Dedicated PS resource assigned to Cluster {worst_cluster} for full shift coverage — {worst_cluster_pct}% of all losts concentrated here.")
+                # Cluster concentration
+                if w_cluster_pct > 40:
+                    ac(f"Dedicated PS to Cluster {w_cluster} full shift — {w_cluster_pct}% of losts here.")
                 else:
-                    actions.append(f"AC{len(actions)+1}: PS resource to rotate between top clusters ({', '.join([str(c) for c in cluster_counts.head(3).index])}) — losts spread across multiple areas.")
+                    ac(f"PS rotation between top clusters ({', '.join([str(c) for c in cl_counts.head(3).index])}).")
 
-                # Pattern: One DSP significantly above average
-                if worst_dsp_multiple >= 2.0:
-                    actions.append(f"AC{len(actions)+1}: DSP {worst_dsp} to attend stand-down meeting with station leadership — {worst_dsp_multiple}x station average for losts. Review pick-and-stage compliance.")
-                elif worst_dsp_multiple >= 1.5:
-                    actions.append(f"AC{len(actions)+1}: DSP {worst_dsp} to be briefed on correct pick-and-stage process — currently {worst_dsp_multiple}x station average.")
+                # DSP performance
+                if dsp_mult >= 2.0:
+                    ac(f"DSP {w_dsp} stand-down with leadership — {dsp_mult}x average.")
+                elif dsp_mult >= 1.5:
+                    ac(f"DSP {w_dsp} process briefing — {dsp_mult}x average.")
                 else:
-                    actions.append(f"AC{len(actions)+1}: Station-wide process refresher during AM standup — losts spread evenly across DSPs, indicating systemic process gap.")
+                    ac("Station-wide process refresher — losts spread evenly across DSPs.")
 
-                # Pattern: Size-specific issue
-                if worst_size in ["Large Oversize", "Small Oversize"]:
-                    actions.append(f"AC{len(actions)+1}: OS to conduct oversize stow audit in Aisle {worst_aisle} — verify shelf capacity and stow compliance for {worst_size} items which are most commonly lost.")
-                elif worst_size == "Small":
-                    actions.append(f"AC{len(actions)+1}: AA briefing on small parcel stow procedure — ensuring items placed fully inside bins and not balanced on edges. {worst_size_count} small parcels lost this period.")
+                # Size pattern
+                if w_size in ["Large Oversize", "Small Oversize"]:
+                    ac(f"Oversize stow audit in Aisle {w_aisle} — {w_size} most commonly lost.")
+                elif w_size == "Small":
+                    ac(f"Small parcel stow briefing — {w_size_n} small parcels lost.")
                 else:
-                    actions.append(f"AC{len(actions)+1}: OS to walk Cluster {worst_cluster} during sortation checking stow quality for {worst_size} parcels — {worst_size_count} lost this period.")
+                    ac(f"Stow quality walk in Cluster {w_cluster} for {w_size} parcels.")
 
-                # Pattern: One aisle significantly above average (>3x)
-                if avg_aisle_count > 0 and worst_aisle_count >= avg_aisle_count * 3:
-                    actions.append(f"AC{len(actions)+1}: Physical inspection of Aisle {worst_aisle} requested — {worst_aisle_count} losts ({round(worst_aisle_count/avg_aisle_count, 1)}x average). Check for structural issues, overcrowding, or incorrect labelling.")
-                elif avg_aisle_count > 0 and worst_aisle_count >= avg_aisle_count * 2:
-                    actions.append(f"AC{len(actions)+1}: Increased PS presence in Aisle {worst_aisle} during pick — {worst_aisle_count} losts, significantly above station average.")
+                # Aisle anomaly
+                if avg_aisle > 0 and w_aisle_n >= avg_aisle * 3:
+                    ac(f"Physical inspection of Aisle {w_aisle} — {round(w_aisle_n/avg_aisle,1)}x average.")
+                elif avg_aisle > 0 and w_aisle_n >= avg_aisle * 2:
+                    ac(f"Increased PS in Aisle {w_aisle} — {w_aisle_n} losts, above average.")
                 else:
-                    actions.append(f"AC{len(actions)+1}: Daily PS huddle to review previous day's losts by aisle and assign targeted investigations based on volume and repeat locations.")
+                    ac("Daily PS huddle to review losts by aisle.")
 
-                # Pattern: RELO cycle contributing significantly
-                relo_count = sum(cycle_counts_bridge.get(c, 0) for c in cycle_counts_bridge.index if "RELO" in str(c))
-                if relo_count > total_lost * 0.15:
-                    actions.append(f"AC{len(actions)+1}: RELO process review — {relo_count} losts from relocation cycles. Ensure packages scanned correctly before transfer and manifests reconciled at destination.")
+                # RELO check
+                relo_n = sum(cy_counts.get(c, 0) for c in cy_counts.index if "RELO" in str(c))
+                if relo_n > total * 0.15:
+                    ac(f"RELO process review — {relo_n} losts from relocation cycles.")
 
-                # Pattern: One day significantly worse (>30% of all losts)
-                if len(daily_counts) > 1 and worst_day_count > total_lost * 0.3:
-                    actions.append(f"AC{len(actions)+1}: Review {worst_day} staffing levels vs package volume — {worst_day_count} losts ({round(worst_day_count/total_lost*100,1)}% of total). Potential understaffing driving process shortcuts.")
+                # Day spike
+                if len(daily) > 1 and w_day_n > total * 0.3:
+                    ac(f"Review {w_day} staffing — {w_day_n} losts ({round(w_day_n/total*100,1)}% of total).")
 
-                actions_text = "\n".join(actions)
-
-                # --- BUILD FULL BRIDGE ---
-                bridge_text = f"""Lost Parcels Bridge - DRM2
+                # --- BUILD BRIDGE TEXT ---
+                bridge = f"""Lost Parcels Bridge - DRM2
 {date_range_text}
 
-Lost (Total): {total_lost}
+Lost (Total): {total}
 
 Daily Breakdown:
 {daily_lines}
 
-RC1) Location Concentration:
+RC1) Location:
 {cluster_details}
-RC2) DSP Performance:
+RC2) DSP:
 {dsp_lines}
 
-RC3) Package Size:
+RC3) Size:
 {size_lines}
 
-RC4) Package Status:
+RC4) Status:
 {state_lines}
 
-{actions_text}
+{chr(10).join(actions)}
 """
-
                 st.subheader("Draft Bridge")
-                st.text_area("Edit as needed:", value=bridge_text, height=500)
+                st.text_area("Edit:", value=bridge, height=450, key="bridge_txt")
 
-                # --- ENHANCE WITH QUICK ---
+                # Quick prompt
                 st.subheader("Enhance with Quick")
-                st.write("For unique, AI-generated action plans, copy the prompt below and paste into Quick online.")
+                prompt = f"""Write a Lost Parcels bridge for DRM2. Use RC1-4 for root causes, AC1-4 for actions. Be specific.
 
-                quick_prompt = f"""Write me a Lost Parcels bridge for DRM2 in the same style as a PS Effectiveness bridge. Use RC1, RC2, RC3, RC4 for root causes and AC1, AC2, AC3, AC4 for action plans. Make actions specific, realistic, and different from generic templates.
+Data ({date_range_text}): Total={total}, Cluster={w_cluster} ({w_cluster_n}, {w_cluster_pct}%), Aisle={w_aisle} ({w_aisle_n}), DSP={w_dsp} ({w_dsp_n}, {dsp_mult}x avg), Size={w_size} ({w_size_n}), Cycle={top_cycle} ({top_cycle_n}), Day={w_day} ({w_day_n})
+Daily: {daily_lines}
+Clusters: {cluster_details}DSPs: {dsp_lines}
 
-Data ({date_range_text}):
-- Total lost: {total_lost}
-- Worst cluster: {worst_cluster} ({worst_cluster_count} parcels, {worst_cluster_pct}%)
-- Worst aisle: {worst_aisle} ({worst_aisle_count} parcels)
-- Worst DSP: {worst_dsp} ({worst_dsp_count} parcels, {worst_dsp_multiple}x average)
-- Most common size lost: {worst_size} ({worst_size_count} parcels)
-- Top cycle: {top_cycle} ({top_cycle_count} parcels)
-- Worst day: {worst_day} ({worst_day_count} parcels)
-- Daily breakdown: {daily_lines}
-
-Top 3 clusters:
-{cluster_details}
-Top 3 DSPs:
-{dsp_lines}
-
-Generate realistic, specific action plans that a station manager would actually implement. Reference specific clusters, aisles, DSPs, sizes, and days from the data. Keep the tone professional and concise.
+Generate specific actions a station manager would implement. Reference clusters, aisles, DSPs, sizes, days.
 """
+                st.code(prompt, language="text")
+                st.info("Copy icon (top-right) → Quick → Ctrl+V")
 
-                st.code(quick_prompt, language="text")
-                st.info("Click the copy icon (top-right corner above) → Open Quick → Ctrl+V")
+
+# =====================================================================
+# MULTI-STATION COMPARE MODE
+# =====================================================================
+else:
+    st.subheader("Upload Station Data (2–5 stations)")
+    st.caption("One SCC export per station. Station name auto-detected from 'Station' column.")
+
+    num = st.slider("Stations to compare:", 2, 5, 2, key="num_st")  # slider for number of stations
+
+    # Separate uploaders in columns
+    uploaded = {}
+    cols = st.columns(num)
+    for i in range(num):
+        with cols[i]:
+            f = st.file_uploader(f"Station {i+1}", type="csv", key=f"st_up_{i}")
+            if f:
+                uploaded[i] = f
+
+    # Process if at least 2 files uploaded
+    if len(uploaded) >= 2:
+        stations = {}  # dict of {name: dataframe}
+        names = []  # ordered list of station names
+
+        for i, file in uploaded.items():
+            temp = clean_data(pd.read_csv(file))  # read + clean
+            name = get_station_name(temp, file.name)  # detect station name
+            stations[name] = temp
+            names.append(name)
+
+        st.success(f"Loaded: {', '.join(names)}")
+
+        # Summary metrics row
+        st.subheader("Station Summary")
+        mcols = st.columns(len(names))
+        for idx, name in enumerate(names):
+            mcols[idx].metric(name, f"{len(stations[name])} lost")
+
+        # --- TABS ---
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
+            ["Overview", "Location", "Rankings", "DSP & Cycle", "Time", "Export", "Bridge"]
+        )
+
+        # TAB 1: OVERVIEW COMPARE
+        with tab1:
+            st.caption("Compare totals, size, and clusters across stations.")
+            view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="mc_ov")
+
+            if view == "Chart":
+                # Total losts bar
+                st.subheader("Total Lost by Station")
+                fig, ax = plt.subplots(figsize=(10, 5))
+                ax.bar(names, [len(stations[n]) for n in names], color=STATION_COLORS[:len(names)])
+                ax.set_ylabel("Lost Parcels")
+                ax.set_title("Total Lost Parcels by Station")
+                plt.tight_layout()
+                st.pyplot(fig)
+
+                # Grouped size breakdown
+                st.subheader("Size Breakdown by Station")
+                fig2, ax2 = plt.subplots(figsize=(12, 5))
+                x = range(len(SIZE_ORDER))
+                w = 0.8 / len(names)  # bar width based on station count
+                for idx, name in enumerate(names):
+                    counts = [len(stations[name][stations[name]["Size Category"] == s]) for s in SIZE_ORDER]
+                    offset = (idx - len(names)/2 + 0.5) * w  # centre bars around tick
+                    ax2.bar([xi + offset for xi in x], counts, w, label=name, color=STATION_COLORS[idx])
+                ax2.set_xticks(x)
+                ax2.set_xticklabels(SIZE_ORDER)
+                ax2.set_ylabel("Lost Parcels")
+                ax2.legend()
+                plt.tight_layout()
+                st.pyplot(fig2)
+
+                # Cluster charts per station
+                st.subheader("Clusters per Station")
+                for idx, name in enumerate(names):
+                    cl = stations[name]["Cluster"].dropna().value_counts()
+                    if len(cl) > 0:
+                        st.pyplot(plot_bar(cl, "Cluster", "Lost", f"{name} — Clusters",
+                                           color=STATION_COLORS[idx], figsize=(10, 3)))
+            else:
+                # Table view
+                st.subheader("Totals")
+                st.dataframe(pd.DataFrame({"Station": names, "Total Lost": [len(stations[n]) for n in names]},
+                                          index=range(1, len(names)+1)))
+
+                st.subheader("Size Breakdown")
+                sz = {n: [len(stations[n][stations[n]["Size Category"] == s]) for s in SIZE_ORDER] for n in names}
+                st.dataframe(pd.DataFrame(sz, index=SIZE_ORDER))
+
+                st.subheader("Clusters")
+                for name in names:
+                    st.write(f"**{name}:**")
+                    cl = stations[name]["Cluster"].dropna().value_counts()
+                    if len(cl) > 0:
+                        st.dataframe(make_table(cl, "Cluster", "Lost Parcels"))
+
+        # TAB 2: LOCATION COMPARE
+        with tab2:
+            st.caption("Drill into each station's cluster hotspots.")
+            for idx, name in enumerate(names):
+                st.subheader(f"📍 {name}")
+                sdf = stations[name]
+                clusters = sorted(sdf["Cluster"].dropna().unique())
+
+                if clusters:
+                    sel = st.selectbox(f"Cluster ({name}):", clusters, key=f"mc_cl_{idx}")
+                    filt = sdf[sdf["Cluster"] == sel]
+                    st.write(f"{len(filt)} parcels in Cluster {sel}")
+
+                    # Aisle chart
+                    ai = filt["Aisle"].dropna().value_counts().head(10)
+                    if len(ai) > 0:
+                        st.pyplot(plot_bar(ai, "Aisle", "Lost", f"{name} — Cluster {sel} Aisles",
+                                           color=STATION_COLORS[idx], figsize=(12, 4)))
+                    # Zone chart
+                    zn = filt["Sort Zone"].dropna().value_counts().head(10)
+                    if len(zn) > 0:
+                        st.pyplot(plot_bar(zn, "Sort Zone", "Lost", f"{name} — Cluster {sel} Zones",
+                                           color=STATION_COLORS[idx], rotate=45, figsize=(12, 4)))
+                else:
+                    st.info(f"No cluster data for {name}.")
+                st.markdown("---")
+
+        # TAB 3: RANKINGS COMPARE
+        with tab3:
+            st.caption("Top 10 worst locations per station.")
+            rank_by = st.selectbox("Rank by:", ["Sort Zone", "Aisle"], key="mc_rank")
+            rank_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="mc_rank_v")
+
+            for idx, name in enumerate(names):
+                data = stations[name][rank_by].dropna().value_counts().head(10)
+                if len(data) > 0:
+                    if rank_view == "Chart":
+                        st.pyplot(plot_bar(data, "Lost", rank_by, f"{name} — Top 10 {rank_by}s",
+                                           color=STATION_COLORS[idx], horizontal=True, figsize=(12, 4)))
+                    else:
+                        st.subheader(name)
+                        st.dataframe(make_table(data, rank_by, "Lost Parcels"))
+
+        # TAB 4: DSP & CYCLE COMPARE
+        with tab4:
+            st.caption("DSP and cycle comparison across stations.")
+            dsp_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="mc_dsp_v")
+
+            if dsp_view == "Chart":
+                # DSP per station
+                for idx, name in enumerate(names):
+                    dsp = stations[name]["DSP Name"].dropna().value_counts().head(10)
+                    if len(dsp) > 0:
+                        st.pyplot(plot_bar(dsp, "DSP", "Lost", f"{name} — Top DSPs",
+                                           color=STATION_COLORS[idx], rotate=45, figsize=(12, 4)))
+
+                # Grouped cycle chart
+                st.subheader("Cycle Comparison")
+                all_cycles = sorted(set().union(*[stations[n]["Assigned Cycle"].dropna().unique() for n in names]))
+                if all_cycles:
+                    fig, ax = plt.subplots(figsize=(12, 5))
+                    x = range(len(all_cycles))
+                    w = 0.8 / len(names)
+                    for idx, name in enumerate(names):
+                        cy = stations[name]["Assigned Cycle"].dropna().value_counts()
+                        counts = [cy.get(c, 0) for c in all_cycles]
+                        offset = (idx - len(names)/2 + 0.5) * w
+                        ax.bar([xi + offset for xi in x], counts, w, label=name, color=STATION_COLORS[idx])
+                    ax.set_xticks(x)
+                    ax.set_xticklabels(all_cycles)
+                    ax.set_ylabel("Lost Parcels")
+                    ax.set_title("Cycle Comparison — All Stations")
+                    ax.legend()
+                    plt.tight_layout()
+                    st.pyplot(fig)
+            else:
+                for idx, name in enumerate(names):
+                    st.subheader(name)
+                    dsp = stations[name]["DSP Name"].dropna().value_counts()
+                    if len(dsp) > 0:
+                        st.write("**DSPs:**")
+                        st.dataframe(make_table(dsp, "DSP", "Lost Parcels"))
+                    cy = stations[name]["Assigned Cycle"].dropna().value_counts()
+                    if len(cy) > 0:
+                        st.write("**Cycles:**")
+                        st.dataframe(make_table(cy, "Cycle", "Lost Parcels"))
+                    st.markdown("---")
+
+        # TAB 5: TIME COMPARE
+        with tab5:
+            st.caption("Day-of-week patterns across stations.")
+            time_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="mc_time_v")
+
+            if time_view == "Chart":
+                # Overlaid line chart (all stations on one graph)
+                st.subheader("Day of Week — All Stations")
+                fig, ax = plt.subplots(figsize=(12, 5))
+                for idx, name in enumerate(names):
+                    if "Day of Week" in stations[name].columns:
+                        dd = stations[name]["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
+                        ax.plot(dd.index, dd.values, marker="o", label=name,
+                                color=STATION_COLORS[idx], linewidth=2)  # line per station
+                ax.set_ylabel("Lost Parcels")
+                ax.set_title("Lost by Day — Station Comparison")
+                ax.legend()
+                plt.tight_layout()
+                st.pyplot(fig)
+
+                # Individual bar charts
+                for idx, name in enumerate(names):
+                    if "Day of Week" in stations[name].columns:
+                        dd = stations[name]["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
+                        st.pyplot(plot_bar(dd, "Day", "Lost", f"{name} — by Day",
+                                           color=STATION_COLORS[idx], figsize=(10, 3)))
+            else:
+                st.subheader("Day of Week Comparison")
+                day_all = {}
+                for name in names:
+                    if "Day of Week" in stations[name].columns:
+                        day_all[name] = stations[name]["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0).values
+                st.dataframe(pd.DataFrame(day_all, index=DAY_ORDER))  # one column per station
+
+        # TAB 6: EXPORT COMPARE
+        with tab6:
+            st.caption("Download individual or combined station data.")
+
+            st.subheader("Individual Downloads")
+            for name in names:
+                st.download_button(f"Download {name}", stations[name].to_csv(index=False),
+                                   f"Lost_{name}_Cleaned.csv", "text/csv", key=f"dl_{name}")
+
+            st.subheader("Combined Download")
+            combined = pd.concat([stations[n].assign(Station_Name=n) for n in names], ignore_index=True)
+            st.download_button("Download All Stations Combined", combined.to_csv(index=False),
+                               "Lost_All_Stations_Combined.csv", "text/csv", key="dl_all")
+
+        # TAB 7: BRIDGE COMPARE
+        with tab7:
+            st.caption("Cross-station comparison summary.")
+
+            # Comparison table
+            st.subheader("Station Comparison")
+            comp = []
+            for name in names:
+                sdf = stations[name]
+                comp.append({
+                    "Station": name,
+                    "Total Lost": len(sdf),
+                    "Worst Cluster": safe_top(sdf["Cluster"]),
+                    "Worst Aisle": safe_top(sdf["Aisle"]),
+                    "Top DSP": safe_top(sdf["DSP Name"]),
+                    "Most Lost Size": safe_top(sdf["Size Category"]),
+                    "Top Cycle": safe_top(sdf["Assigned Cycle"])
+                })
+            st.dataframe(pd.DataFrame(comp, index=range(1, len(comp)+1)))
+
+            # Best vs worst
+            st.subheader("Key Differences")
+            best = min(names, key=lambda n: len(stations[n]))  # fewest losts
+            worst = max(names, key=lambda n: len(stations[n]))  # most losts
+            gap = len(stations[worst]) - len(stations[best])
+            gap_pct = round(gap / len(stations[worst]) * 100, 1) if len(stations[worst]) > 0 else 0
+
+            st.write(f"**Best:** {best} ({len(stations[best])} losts)")
+            st.write(f"**Worst:** {worst} ({len(stations[worst])} losts)")
+            st.write(f"**Gap:** {gap} parcels ({gap_pct}% difference)")
+
+            # Quick prompt for comparison
+            st.subheader("Enhance with Quick")
+            summaries = "\n".join([f"- {n}: {len(stations[n])} losts, worst cluster={safe_top(stations[n]['Cluster'])}, worst DSP={safe_top(stations[n]['DSP Name'])}" for n in names])
+            compare_prompt = f"""Compare these stations' lost parcel performance and suggest what {worst} can learn from {best}:
+
+{summaries}
+
+Best: {best} ({len(stations[best])} losts)
+Worst: {worst} ({len(stations[worst])} losts)
+Gap: {gap} parcels
+
+Generate specific recommendations for {worst} based on what {best} does differently. Cover cluster management, DSP accountability, size handling, and cycles.
+"""
+            st.code(compare_prompt, language="text")
+            st.info("Copy icon → Quick → Ctrl+V")
+
+    elif len(uploaded) == 1:
+        st.warning("Upload at least 2 files to compare.")  # need minimum 2
+    else:
+        st.info("Upload CSV files above to begin.")  # no files yet
