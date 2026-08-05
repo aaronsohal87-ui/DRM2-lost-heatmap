@@ -31,6 +31,7 @@ REQUIRED_COLS = [
 CHART_FULL = (7, 2.5)  # standard chart size (width, height in inches)
 CHART_SMALL = (6, 2)  # smaller chart for per-station breakdowns
 CHART_WIDE = (8, 2.5)  # slightly wider for charts with many x-axis labels
+DSP_NAME_MAX = 20  # max characters for DSP names before truncating
 
 
 # --- HELPER FUNCTIONS (reusable blocks of code) ---
@@ -120,20 +121,34 @@ def safe_top(series, n=1):
     return counts.index[0] if n == 1 else counts.head(n)  # most frequent value
 
 
+def truncate_labels(labels, max_len=DSP_NAME_MAX):
+    """
+    Shortens long text labels so they don't overlap on charts.
+    Adds "..." if truncated. e.g. "LEONARD BUCK LOGISTICS LTD" → "LEONARD BUCK LOGIST..."
+    """
+    return [str(l)[:max_len] + "..." if len(str(l)) > max_len else str(l) for l in labels]
+
+
 def plot_bar(data, xlabel, ylabel, title, color="steelblue", horizontal=False, figsize=CHART_FULL):
     """
     Creates a bar chart from a pandas Series (index = labels, values = bar heights).
-    - horizontal=True makes it a horizontal bar chart (good for rankings)
+    - horizontal=True makes it a horizontal bar chart (good for rankings + long names)
     - figsize controls width and height in inches
     - All labels are always horizontal (rotation=0)
+    - Long labels are auto-truncated to prevent overlap
     Returns the figure object ready for st.pyplot().
     """
     fig, ax = plt.subplots(figsize=figsize)  # create figure + axes at specified size
+
+    # Truncate any long labels to prevent overlap
+    labels = truncate_labels(data.index)
+
     if horizontal:
-        ax.barh(data.index, data.values, color=color)  # horizontal bars
+        ax.barh(labels, data.values, color=color)  # horizontal bars
         ax.invert_yaxis()  # put highest value at the top
     else:
-        ax.bar(data.index, data.values, color=color)  # vertical bars
+        ax.bar(labels, data.values, color=color)  # vertical bars
+
     ax.set_xlabel(xlabel, fontsize=8)  # x-axis label, small font
     ax.set_ylabel(ylabel, fontsize=8)  # y-axis label, small font
     ax.set_title(title, fontsize=9)  # chart title, slightly larger
@@ -141,6 +156,30 @@ def plot_bar(data, xlabel, ylabel, title, color="steelblue", horizontal=False, f
     plt.xticks(rotation=0, ha="center")  # keep all labels horizontal
     plt.tight_layout()  # auto-adjust spacing so nothing gets cut off
     return fig  # return the figure (caller passes to st.pyplot)
+
+
+def plot_dsp(data, title, color="orange", figsize=CHART_FULL):
+    """
+    Special chart for DSP names — ALWAYS horizontal because DSP names are long.
+    Horizontal bars put the names on the y-axis where there's room to read them.
+    Height auto-scales based on number of DSPs (more DSPs = taller chart).
+    """
+    # Calculate height based on number of bars (each bar gets ~0.3 inches)
+    n_bars = len(data)
+    auto_height = max(2, n_bars * 0.3)  # minimum 2 inches, scales up with more DSPs
+    fig, ax = plt.subplots(figsize=(figsize[0], auto_height))  # width stays same, height adapts
+
+    # Truncate DSP names that are too long
+    labels = truncate_labels(data.index)
+
+    ax.barh(labels, data.values, color=color)  # horizontal bars — names on y-axis
+    ax.invert_yaxis()  # worst DSP (highest value) at the top
+    ax.set_xlabel("Lost Parcels", fontsize=8)  # x-axis = count
+    ax.set_ylabel("DSP", fontsize=8)  # y-axis = DSP names
+    ax.set_title(title, fontsize=9)  # chart title
+    ax.tick_params(labelsize=7)  # small font for tick labels
+    plt.tight_layout()  # prevent cutoff
+    return fig
 
 
 def make_table(series, col1_name, col2_name):
@@ -312,9 +351,10 @@ if mode == "Single Station":
 
                 if dsp_view == "Chart":
                     if len(dsp_data) > 0:
-                        st.pyplot(plot_bar(dsp_data, "DSP", "Lost Parcels",
-                                           f"Lost by DSP ({date_range_text})", color="orange"))
+                        # DSP chart is ALWAYS horizontal — names are too long for x-axis
+                        st.pyplot(plot_dsp(dsp_data, f"Lost by DSP ({date_range_text})", color="orange"))
                     if len(cycle_data) > 0:
+                        # Cycle names are short so vertical bars work fine
                         st.pyplot(plot_bar(cycle_data, "Cycle", "Lost Parcels",
                                            f"Lost by Cycle ({date_range_text})", color="purple"))
                 else:
@@ -664,12 +704,12 @@ else:
             dsp_view = st.radio("Display:", ["Chart", "Table"], horizontal=True, key="mc_dsp_v")
 
             if dsp_view == "Chart":
-                # DSP charts per station
+                # DSP charts per station — ALWAYS horizontal (long names)
                 for idx, name in enumerate(names):
                     dsp = stations[name]["DSP Name"].dropna().value_counts().head(10)
                     if len(dsp) > 0:
-                        st.pyplot(plot_bar(dsp, "DSP", "Lost", f"{name} — Worst DSPs",
-                                           color=STATION_COLORS[idx]))
+                        st.pyplot(plot_dsp(dsp, f"{name} — Worst DSPs",
+                                           color=STATION_COLORS[idx], figsize=CHART_FULL))
 
                 # Grouped cycle comparison (all stations on one chart)
                 st.subheader("Cycle Comparison")
