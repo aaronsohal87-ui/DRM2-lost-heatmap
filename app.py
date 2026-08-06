@@ -83,7 +83,7 @@ def merge_data(pm_df, scc_df):
     if "previous_reason_3" in merged.columns: merged["UTR Reason"] = merged["previous_reason_3"].replace({"NOREASON":"No Reason","NONE":"No Reason"}).fillna("Unknown")
     else: merged["UTR Reason"] = "Unknown"
     merged["Shift"] = merged.apply(assign_shift, axis=1)
-    for col in ["Cluster","Aisle","Sort Zone","DSP Name","Size Category","City","Province","Postal","Cost (£)"]: 
+    for col in ["Cluster","Aisle","Sort Zone","DSP Name","Size Category","City","Province","Postal","Cost (£)"]:
         if col not in merged.columns: merged[col] = None
     return merged
 def get_date_range(df):
@@ -164,7 +164,7 @@ def render_locations_tab(df, total, dr, kp=""):
             r = vdf["Loss Reason"].dropna().value_counts()
             if len(r)>0:
                 vm = st.radio("View:",["Chart","Table"],horizontal=True,key=f"{kp}or")
-                if vm=="Chart": st.pyplot(make_bar_horiz(r,f"OTR Reasons",color="crimson"))
+                if vm=="Chart": st.pyplot(make_bar_horiz(r,"OTR Reasons",color="crimson"))
                 else: st.dataframe(make_table(r,"Reason","Count"),use_container_width=True)
     elif lf == "UTR Only":
         vdf = df[df["Type"]=="UTR"].copy(); st.write(f"**{len(vdf)} UTR** — {fmt_cost(vdf['Cost (£)'].sum())}")
@@ -173,13 +173,13 @@ def render_locations_tab(df, total, dr, kp=""):
             sb = vdf["Sub Bucket"].value_counts()
             if len(sb)>0:
                 vm = st.radio("View:",["Chart","Table + Cost"],horizontal=True,key=f"{kp}usb")
-                if vm=="Chart": st.pyplot(make_bar_horiz(sb,f"UTR Sub Buckets",color="darkorange"))
+                if vm=="Chart": st.pyplot(make_bar_horiz(sb,"UTR Sub Buckets",color="darkorange"))
                 else: st.dataframe(make_cost_table(vdf,"Sub Bucket"),use_container_width=True)
         with st.expander("📍 By Cluster"):
             cl = vdf["Cluster"].dropna().value_counts()
             if len(cl)>0:
                 vm = st.radio("View:",["Chart","Table + Cost"],horizontal=True,key=f"{kp}ul")
-                if vm=="Chart": st.pyplot(make_bar_horiz(cl,f"UTR Clusters",color="darkorange"))
+                if vm=="Chart": st.pyplot(make_bar_horiz(cl,"UTR Clusters",color="darkorange"))
                 else: st.dataframe(make_cost_table(vdf.dropna(subset=["Cluster"]),"Cluster"),use_container_width=True)
     else:
         vdf = df.copy(); st.write(f"**{len(vdf)} all** — {fmt_cost(vdf['Cost (£)'].sum())}")
@@ -265,348 +265,285 @@ def render_cost_tab(df, total, dr, kp=""):
         out = top[sc2].reset_index(drop=True); out.index = range(1,len(out)+1); st.dataframe(out,use_container_width=True)
 
 def render_analysis_tab(df, total, dr, kp=""):
-    """Statistical root cause analysis — user-friendly with explanations."""
+    """Simple, user-friendly root cause analysis."""
     st.markdown("### 🔬 Root Cause Analysis")
-    st.markdown("""
-> **What is this page?** This tab uses statistical methods to go beyond "what happened" and answer 
-> **"why is it happening?"** Each test below looks at your data from a different angle to find 
-> patterns that aren't obvious from charts alone. The results tell you where to focus your 
-> problem-solving efforts for maximum impact.
-""")
+    st.info("💡 **This page answers one question: WHERE should we focus to reduce lost parcels the most?** "
+            "Each section below looks at your data from a different angle. Look for the 🎯 icons — those are the key findings.")
 
     total_cost = df["Cost (£)"].sum()
     findings = []
 
-    # ─── DATA SUFFICIENCY (moved to top) ─────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════════
+    # DATA SUFFICIENCY — AT THE TOP
+    # ═══════════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("### 📊 Data Sufficiency — Can We Trust the Results?")
-    st.markdown("""
-> **Why this matters:** Statistical tests need a minimum amount of data to produce reliable conclusions. 
-> Think of it like a survey — asking 3 people isn't enough to draw conclusions about a whole population. 
-> The table below shows which tests have enough data to run. ❌ tests need more data before the results 
-> are meaningful — the "How to Fix" column tells you what to upload.
-""")
+    st.markdown("#### 📋 Do we have enough data?")
+    st.caption("More data = more reliable results. Green = good to go. Red = need more uploads.")
 
-    cluster_ok = len(df["Cluster"].dropna().value_counts()) >= 2
-    shift_ok = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].count() >= 20
-    dsp_ok = len(df[df["Type"]=="OTR"]) >= 5
-    day_ok = df["Day of Week"].dropna().count() >= 14 if "Day of Week" in df.columns else False
+    cluster_count = len(df["Cluster"].dropna().value_counts())
+    shift_count = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].count()
+    otr_count = len(df[df["Type"]=="OTR"])
+    day_count = df["Day of Week"].dropna().count() if "Day of Week" in df.columns else 0
+    size_count = len(df["Size Category"].value_counts())
 
     checks = [
-        ("📊 Concentration (Pareto)", "✅ Ready" if cluster_ok else "❌ Need 2+ clusters", 
-         "Upload SCC data with cluster info" if not cluster_ok else "—"),
-        ("⏰ Shift Significance", "✅ Ready" if shift_ok else f"❌ Need 20+ parcels (have {df[df['Shift'].isin(SHIFT_ORDER)]['Shift'].count()})", 
-         "Upload more days of data" if not shift_ok else "—"),
-        ("💰 Cost Disproportionality", "✅ Ready" if total_cost > 0 else "❌ No cost data", 
-         "Ensure PM export includes shipment_value" if total_cost == 0 else "—"),
-        ("🚚 DSP Outlier Detection", "✅ Ready" if dsp_ok else f"❌ Need 5+ OTR parcels (have {len(df[df['Type']=='OTR'])})", 
-         "Upload more data or check OTR classification" if not dsp_ok else "—"),
-        ("📅 Day-of-Week Pattern", "✅ Ready" if day_ok else f"❌ Need 14+ dated parcels (have {df['Day of Week'].dropna().count() if 'Day of Week' in df.columns else 0})", 
-         "Upload a full 2-week period minimum" if not day_ok else "—"),
-        ("📏 Size Analysis", "✅ Ready" if len(df["Size Category"].value_counts()) >= 2 else "❌ Need size data", 
-         "Ensure SCC export includes Package Length/Width/Height" if len(df["Size Category"].value_counts()) < 2 else "—"),
-        ("📈 Trend Analysis (over time)", "❌ Need 2+ weeks of data", "Upload data spanning at least 2 weeks"),
-        ("🔮 Forecasting", "❌ Need 4+ weeks of data", "Upload data spanning at least 4 weeks"),
+        ("Where are losses happening?", "✅ Ready" if cluster_count >= 2 else "❌ Need more cluster data", ""),
+        ("Which shift is worst?", "✅ Ready" if shift_count >= 20 else f"❌ Need 20+ parcels (have {shift_count})", "Upload more days"),
+        ("Which costs the most?", "✅ Ready" if total_cost > 0 else "❌ No cost data", "Check PM has shipment_value"),
+        ("Any problem DSPs?", "✅ Ready" if otr_count >= 5 else f"❌ Need 5+ OTR (have {otr_count})", "Upload more data"),
+        ("Any problem days?", "✅ Ready" if day_count >= 14 else f"❌ Need 14+ parcels (have {day_count})", "Upload 2+ weeks"),
+        ("Size a factor?", "✅ Ready" if size_count >= 2 else "❌ Need size data", "Check SCC has dimensions"),
     ]
 
-    ready_count = sum(1 for _,s,_ in checks if "✅" in s)
-    st.markdown(f"**{ready_count}/{len(checks)}** tests have sufficient data to run.")
-    st.dataframe(
-        pd.DataFrame(checks, columns=["Test", "Status", "How to Fix"]),
-        use_container_width=True, hide_index=True
-    )
-    if ready_count < len(checks):
-        st.caption("💡 **Tip:** Upload a larger date range (2+ weeks) to unlock all tests and get stronger conclusions.")
+    ready = sum(1 for _, s, _ in checks if "✅" in s)
+    if ready == len(checks):
+        st.success(f"✅ All {len(checks)} tests ready to run!")
+    else:
+        st.warning(f"⚠️ {ready}/{len(checks)} tests ready. Upload more data to unlock the rest.")
 
-    # ─── ANALYSIS RESULTS ─────────────────────────────────────────────────
+    check_df = pd.DataFrame(checks, columns=["Question", "Status", "How to fix"])
+    st.dataframe(check_df, use_container_width=True, hide_index=True)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # THE ACTUAL ANALYSIS — SIMPLE LANGUAGE
+    # ═══════════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("### 🎯 Analysis Results")
-    st.markdown("""
-> **How to read the results:** Each section below runs a specific test. Look for 🎯 markers — 
-> these highlight **statistically significant** findings (i.e., patterns that are very unlikely 
-> to be random chance). These are your highest-confidence action items.
-""")
+    st.markdown("#### 🎯 Results")
 
-    # 1. CONCENTRATION (Pareto / Gini)
-    with st.expander("📊 Test 1: Concentration — Are losses spread out or focused in a few spots?", expanded=True):
-        st.markdown("""
-**What this tells you:** Are your lost parcels spread evenly across the station, or concentrated 
-in just a few locations? If losses are concentrated, you can get the biggest impact by fixing 
-just those few problem areas rather than trying to fix everything at once.
-
-**How to interpret:**
-- **Gini coefficient** (0 to 1): 0 = perfectly equal (every cluster loses the same), 1 = all losses in one place. 
-  Above 0.4 = "concentrated enough to target specific areas."
-- **Top 3 clusters:** If these account for >50% of losses, start your problem-solving here.
-- **80/20 rule:** Shows how many clusters account for 80% of all losses — fewer = more concentrated = easier to fix.
-""")
+    # ─── 1. WHERE are losses happening? ───────────────────────────────────
+    with st.expander("📍 1. Where are most losses happening?", expanded=True):
+        st.caption("Are losses spread out, or piling up in a few places?")
         cl_c = df["Cluster"].dropna().value_counts()
         if len(cl_c) >= 2:
-            cumsum = cl_c.cumsum(); t80 = cl_c.sum()*0.8
-            c80 = len(cumsum[cumsum <= t80]) + 1; pct80 = round(c80/len(cl_c)*100,1)
-            top3_pct = round(cl_c.head(3).sum()/cl_c.sum()*100,1)
-            top3_cost = df[df["Cluster"].isin(cl_c.head(3).index)]["Cost (£)"].sum()
+            top3 = cl_c.head(3)
+            top3_pct = round(top3.sum() / cl_c.sum() * 100, 1)
+            top3_cost = df[df["Cluster"].isin(top3.index)]["Cost (£)"].sum()
+            top3_names = ", ".join(top3.index.tolist())
+
+            # Simple Gini
             vals = cl_c.values.astype(float); n = len(vals)
-            sv = np.sort(vals); gini = (2*np.sum(np.arange(1,n+1)*sv)-(n+1)*np.sum(sv))/(n*np.sum(sv))
-            conc = "highly concentrated" if gini>0.5 else "moderately concentrated" if gini>0.3 else "fairly spread out"
-            
-            # Verdict
+            sv = np.sort(vals)
+            gini = (2 * np.sum(np.arange(1, n+1) * sv) - (n+1) * np.sum(sv)) / (n * np.sum(sv))
+
             if gini > 0.5:
-                st.error(f"🎯 **Losses are {conc}** (Gini: {gini:.2f}) — a small number of locations are driving most losses.")
+                st.error(f"🎯 **Heavily concentrated!** Just 3 clusters account for **{top3_pct}%** of all losses.")
+                verdict = "Losses are piling up in a few spots. Fix these first for biggest impact."
             elif gini > 0.3:
-                st.warning(f"⚠️ **Losses are {conc}** (Gini: {gini:.2f}) — some locations are worse than others.")
+                st.warning(f"⚠️ **Somewhat concentrated.** Top 3 clusters = **{top3_pct}%** of losses.")
+                verdict = "Some areas are worse than others. Worth targeting the top 3."
             else:
-                st.info(f"ℹ️ **Losses are {conc}** (Gini: {gini:.2f}) — no single area dominates.")
-            
+                st.info(f"ℹ️ **Spread out.** Top 3 clusters = only {top3_pct}% of losses.")
+                verdict = "No single area dominates. Look at shifts or DSPs instead."
+
             col1, col2 = st.columns(2)
             with col1:
-                st.metric("Top 3 Clusters", f"{top3_pct}% of losses", f"{fmt_cost(top3_cost)} cost")
-                st.caption(f"Clusters: {', '.join(cl_c.head(3).index.tolist())}")
+                st.metric("Top 3 clusters", f"{top3_pct}% of losses")
+                st.caption(top3_names)
             with col2:
-                st.metric("80% of losses come from", f"{c80} of {len(cl_c)} clusters", f"({pct80}% of locations)")
-            
-            st.markdown("**🔑 Action:** " + (
-                f"Focus problem-solving on **{', '.join(cl_c.head(3).index.tolist())}** — fixing just these 3 clusters addresses {top3_pct}% of your losses ({fmt_cost(top3_cost)}). Walk these areas and look for: stow density issues, cage management gaps, or layout problems."
-                if gini > 0.4 else
-                "Losses are fairly spread — no single cluster is an obvious fix. Look at shift or DSP patterns instead."
-            ))
-            if gini > 0.4:
-                findings.append(f"Losses concentrated in top 3 clusters ({', '.join(cl_c.head(3).index.tolist())}) = {top3_pct}% of all losses ({fmt_cost(top3_cost)}). Likely root cause: stow density, cage management, or physical layout in these areas.")
+                st.metric("Cost in those 3", fmt_cost(top3_cost))
+
+            st.markdown(f"**Bottom line:** {verdict}")
+            if gini > 0.3:
+                findings.append(f"Top 3 clusters ({top3_names}) = {top3_pct}% of losses, costing {fmt_cost(top3_cost)}. Walk these areas — look for stow density, cage, or layout issues.")
         else:
-            st.warning("⚠️ Not enough cluster data (need 2+ different clusters). Check your SCC export includes the 'Cluster' column.")
+            st.warning("Not enough location data to analyse.")
 
-    # 2. SHIFT SIGNIFICANCE (Chi-squared)
-    with st.expander("⏰ Test 2: Shift Significance — Is one shift losing more than expected?"):
-        st.markdown("""
-**What this tells you:** If parcels were being lost purely by random chance, you'd expect roughly 
-equal numbers across all shifts. This test checks: **is one shift significantly worse, or is the 
-variation just normal randomness?**
-
-**How to interpret:**
-- **p-value** (0 to 1): The probability that the difference is due to random chance alone.
-  - **p < 0.05** = Less than 5% chance it's random → 🎯 **Significant! Something is actually different about that shift.**
-  - **p > 0.05** = Could easily be random variation → No action needed on shift-specific processes.
-- **Observed vs Expected:** Shows how many losses each shift had vs. how many you'd expect if losses were random.
-""")
-        shift_counts = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts().reindex(SHIFT_ORDER,fill_value=0)
+    # ─── 2. WHICH SHIFT is worst? ────────────────────────────────────────
+    with st.expander("⏰ 2. Is one shift losing more than it should?"):
+        st.caption("If losses were random, each shift would lose roughly the same. This checks if one shift is genuinely worse — or if it's just luck.")
+        shift_counts = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts().reindex(SHIFT_ORDER, fill_value=0)
         assigned = shift_counts.sum()
         if assigned >= 20:
-            expected = np.array([assigned/4]*4); observed = np.array([shift_counts[s] for s in SHIFT_ORDER])
+            expected_per_shift = assigned / 4
+            observed = np.array([shift_counts[s] for s in SHIFT_ORDER])
+            expected = np.array([expected_per_shift] * 4)
             chi2, p = sp_stats.chisquare(observed, f_exp=expected)
-            worst_s = shift_counts.idxmax(); worst_n = int(shift_counts.max())
-            
+            worst_s = shift_counts.idxmax()
+            worst_n = int(shift_counts.max())
+
+            tbl = pd.DataFrame({
+                "Shift": SHIFT_ORDER,
+                "Actual losses": observed.astype(int),
+                "Expected (if equal)": expected.astype(int),
+                "Over/Under": (observed - expected).astype(int)
+            })
+            tbl.index = range(1, 5)
+            st.dataframe(tbl, use_container_width=True)
+
             if p < 0.05:
-                st.error(f"🎯 **Statistically significant** (p = {p:.4f}) — the difference between shifts is NOT random.")
-                st.markdown(f"**{worst_s} shift is the problem** — {worst_n} losses ({round(worst_n/assigned*100,1)}%) vs expected {int(assigned/4)} if equal. "
-                           f"Window: {SHIFT_DEFINITIONS[worst_s]}")
-                findings.append(f"Shift imbalance is statistically significant (p={p:.4f}). {worst_s} has {worst_n} losses ({round(worst_n/assigned*100,1)}%) vs expected {int(assigned/4)}. Not random — process gap in {worst_s} shift ({SHIFT_DEFINITIONS[worst_s]}).")
+                st.error(f"🎯 **Yes — {worst_s} shift is significantly worse!** "
+                         f"It has {worst_n} losses vs ~{int(expected_per_shift)} expected. "
+                         f"This is very unlikely to be random (p={p:.3f}).")
+                st.markdown(f"**What does this mean?** There's a real process gap during **{worst_s}** ({SHIFT_DEFINITIONS[worst_s]}). "
+                           f"Investigate: staffing, compliance, handover quality, or volume spikes in that window.")
+                findings.append(f"{worst_s} shift has {worst_n} losses vs expected {int(expected_per_shift)} — statistically significant (p={p:.3f}). Investigate process during {SHIFT_DEFINITIONS[worst_s]}.")
             else:
-                st.success(f"✅ **Not significant** (p = {p:.2f}) — shift differences are within normal random variation.")
-                st.markdown("No single shift stands out. The variation you see is likely just natural randomness, not a process problem.")
-            
-            tbl = pd.DataFrame({"Shift":SHIFT_ORDER,"Observed":observed.astype(int),"Expected (if equal)":expected.astype(int),"Difference":(observed-expected).astype(int)})
-            tbl.index = range(1,5); st.dataframe(tbl,use_container_width=True)
-            
-            st.markdown("**🔑 Action:** " + (
-                f"Investigate what's different during **{worst_s}** ({SHIFT_DEFINITIONS[worst_s]}). "
-                f"Consider: staffing levels, process compliance, handover quality, volume spikes during this window."
-                if p < 0.05 else
-                "No shift-specific intervention needed — focus efforts elsewhere (e.g., location or DSP)."
-            ))
+                st.success(f"✅ **No — shift differences are just normal variation** (p={p:.2f}). No single shift stands out.")
+                st.markdown("**What does this mean?** The spread across shifts looks random. Don't focus on one specific shift — the problem is elsewhere.")
         else:
-            st.warning(f"⚠️ Not enough data — need 20+ parcels with shift assignments (currently have {assigned}). Upload more data.")
+            st.warning(f"Need 20+ parcels with shift data (have {assigned}). Upload more.")
 
-    # 3. COST DISPROPORTIONALITY
-    with st.expander("💰 Test 3: Cost Disproportionality — Are high-value items lost in specific ways?"):
-        st.markdown("""
-**What this tells you:** Some loss types might affect more expensive parcels than others. This test 
-checks whether certain sub-buckets are losing **disproportionately expensive** items — meaning the 
-*financial* impact is bigger than the *count* suggests.
+    # ─── 3. WHICH LOSS TYPE costs the most per parcel? ────────────────────
+    with st.expander("💰 3. Which loss types hit the most expensive parcels?"):
+        st.caption("Some loss types might affect cheaper parcels, others hit the expensive ones. This finds where the money is.")
+        sb_s = df.groupby("Sub Bucket").agg(Count=("Tracking ID","count"), Cost=("Cost (£)","sum")).reset_index()
+        if len(sb_s) >= 2 and total_cost > 0:
+            sb_s["Avg £/parcel"] = (sb_s["Cost"] / sb_s["Count"]).round(2)
+            overall_avg = total_cost / total
+            sb_s["vs Average"] = sb_s["Avg £/parcel"].apply(
+                lambda x: "🔴 Much higher" if x > overall_avg * 1.5
+                else ("🟡 Slightly higher" if x > overall_avg * 1.1 else "🟢 Normal")
+            )
+            sb_s = sb_s.sort_values("Avg £/parcel", ascending=False)
 
-**How to interpret:**
-- **Ratio** column: Compares the % of total cost vs % of total count for each loss type.
-  - **Ratio = 1.0** = Average (costs proportional to count)
-  - **Ratio > 1.5** = 🎯 This type loses items that cost 50%+ more than average — high priority!
-  - **Ratio < 0.7** = Loses cheaper items (still bad, but less £ impact per parcel)
-""")
-        sb_s = df.groupby("Sub Bucket").agg(Count=("Tracking ID","count"),Cost=("Cost (£)","sum")).reset_index()
-        if len(sb_s)>=2 and total_cost>0:
-            sb_s["% of Total Count"] = (sb_s["Count"]/total*100).round(1)
-            sb_s["% of Total Cost"] = (sb_s["Cost"]/total_cost*100).round(1)
-            sb_s["Ratio (Cost/Count)"] = (sb_s["% of Total Cost"]/sb_s["% of Total Count"]).round(2)
-            sb_s["Avg Cost/Parcel"] = (sb_s["Cost"]/sb_s["Count"]).round(2)
-            sb_s = sb_s.sort_values("Ratio (Cost/Count)",ascending=False)
-            high = sb_s[sb_s["Ratio (Cost/Count)"]>1.5]
-            
-            if len(high)>0:
-                st.error(f"🎯 **{len(high)} loss type(s)** are disproportionately hitting high-value parcels:")
-                for _,row in high.iterrows():
-                    st.markdown(f"- **{row['Sub Bucket']}**: Only {row['% of Total Count']}% of lost parcels but {row['% of Total Cost']}% of cost "
-                               f"(avg {fmt_cost(row['Avg Cost/Parcel'])} vs {fmt_cost(total_cost/total)} overall)")
-                    findings.append(f"{row['Sub Bucket']}: {row['% of Total Count']}% of losses but {row['% of Total Cost']}% of cost (avg {fmt_cost(row['Avg Cost/Parcel'])} vs {fmt_cost(total_cost/total)} overall). High-value items disproportionately lost here.")
+            high = sb_s[sb_s["Avg £/parcel"] > overall_avg * 1.5]
+            if len(high) > 0:
+                st.error(f"🎯 **{len(high)} loss type(s)** are hitting expensive parcels:")
+                for _, row in high.iterrows():
+                    st.markdown(f"- **{row['Sub Bucket']}** — avg {fmt_cost(row['Avg £/parcel'])} per parcel (station avg is {fmt_cost(overall_avg)})")
+                    findings.append(f"{row['Sub Bucket']} loses expensive parcels (avg {fmt_cost(row['Avg £/parcel'])} vs {fmt_cost(overall_avg)} station avg). Prioritise preventing this type.")
+                st.markdown("**What does this mean?** Even a small reduction in these loss types saves more money per parcel than fixing other types.")
             else:
-                st.success("✅ No disproportionate cost impact — all loss types affect similarly-valued parcels.")
-            
-            display = sb_s[["Sub Bucket","Count","% of Total Count","% of Total Cost","Ratio (Cost/Count)","Avg Cost/Parcel"]].copy()
-            display["Avg Cost/Parcel"] = display["Avg Cost/Parcel"].apply(fmt_cost)
-            display.index = range(1,len(display)+1)
-            st.dataframe(display,use_container_width=True)
-            st.caption("📖 **Reading the table:** Ratio > 1.5 means that loss type costs 50%+ more per parcel than the station average. These are your highest-value targets for cost reduction.")
-            
-            st.markdown("**🔑 Action:** " + (
-                "Prioritise preventing " + ", ".join(high["Sub Bucket"].tolist()) + " — even small reductions here save more money per parcel than other types."
-                if len(high) > 0 else
-                "Cost impact is proportional — prioritise by volume (most frequent loss type) rather than per-parcel value."
-            ))
+                st.success("✅ **All loss types affect similarly-priced parcels.** No single type is hitting expensive items disproportionately.")
+                st.markdown("**What does this mean?** Focus on the most frequent loss type rather than chasing high-value ones.")
+
+            display = sb_s[["Sub Bucket", "Count", "Avg £/parcel", "vs Average"]].copy()
+            display["Avg £/parcel"] = display["Avg £/parcel"].apply(fmt_cost)
+            display.index = range(1, len(display)+1)
+            st.dataframe(display, use_container_width=True)
+            st.caption(f"Station average: {fmt_cost(overall_avg)} per lost parcel")
         else:
-            st.warning("⚠️ Need 2+ sub-buckets with cost data to run this test.")
+            st.warning("Need cost data and 2+ loss types to run this.")
 
-    # 4. DSP OUTLIERS (Z-score)
-    with st.expander("🚚 Test 4: DSP Outlier Detection — Is any delivery partner losing far more than others?"):
-        st.markdown("""
-**What this tells you:** Among all DSPs (Delivery Service Partners) handling your parcels, is any one 
-losing **significantly more** than average? This uses a z-score — essentially measuring how many 
-"standard deviations" above the mean each DSP is.
-
-**How to interpret:**
-- **Z-score > 1.5** = 🎯 This DSP is an **outlier** — losing much more than peer DSPs. Worth investigating.
-- **Z-score 0-1.5** = Within normal range — some variation is expected.
-- **Mean & Std:** The average losses per DSP and how spread out they are. A high std means big differences between DSPs.
-
-**Think of it this way:** If the average DSP loses 5 parcels and the standard deviation is 2, a DSP losing 
-10 parcels (z-score = 2.5) is unusual enough to warrant investigation.
-""")
-        otr = df[df["Type"]=="OTR"]
-        if len(otr)>=5:
+    # ─── 4. ANY PROBLEM DSPs? ─────────────────────────────────────────────
+    with st.expander("🚚 4. Is any DSP losing way more than the others?"):
+        st.caption("Compares each DSP against the average. If one DSP is way above, they're an 'outlier' — worth a conversation.")
+        otr = df[df["Type"] == "OTR"]
+        if len(otr) >= 5:
             dc = otr["DSP Name"].dropna().value_counts()
-            if len(dc)>=3:
-                mu = dc.mean(); sigma = dc.std()
-                z = (dc-mu)/sigma if sigma>0 else pd.Series(0,index=dc.index)
-                outliers = z[z>1.5]
-                
-                col1, col2, col3 = st.columns(3)
-                col1.metric("DSPs Active", len(dc))
-                col2.metric("Avg Losses/DSP", f"{mu:.1f}")
-                col3.metric("Std Deviation", f"{sigma:.1f}")
-                
-                tbl = pd.DataFrame({"DSP":dc.index,"Losses":dc.values,"Z-Score":z.values.round(2)})
-                tbl["Flag"] = tbl["Z-Score"].apply(lambda x: "🎯 OUTLIER" if x>1.5 else "✅ Normal")
-                tbl.index = range(1,len(tbl)+1)
-                st.dataframe(tbl,use_container_width=True)
-                
-                if len(outliers)>0:
-                    st.error(f"🎯 **{len(outliers)} DSP outlier(s) detected** — losing far more than peers:")
-                    for dsp,zv in outliers.items():
-                        cost = otr[otr["DSP Name"]==dsp]["Cost (£)"].sum()
-                        reason = otr[otr["DSP Name"]==dsp]["Loss Reason"].dropna().value_counts()
-                        r_str = reason.index[0] if len(reason)>0 else "Unknown"
-                        st.markdown(f"- **{dsp}** — {int(dc[dsp])} losses (z={zv:.1f}), costing {fmt_cost(cost)}. Top reason: _{r_str}_")
-                        findings.append(f"DSP '{dsp}' is a statistical outlier (z={zv:.1f}): {int(dc[dsp])} losses ({fmt_cost(cost)}). Top reason: {r_str}.")
-                    st.markdown("**🔑 Action:** Raise these DSPs in the next DSP performance review. Request root cause from DSP management — is it a specific driver, route, or vehicle issue?")
+            if len(dc) >= 3:
+                mu = dc.mean()
+                sigma = dc.std()
+                if sigma > 0:
+                    z = (dc - mu) / sigma
                 else:
-                    st.success("✅ **No DSP outliers** — OTR losses are spread fairly evenly across delivery partners.")
-                    st.markdown("**🔑 Action:** OTR losses aren't a DSP-specific problem — look at route difficulty, package type, or time-of-day patterns instead.")
+                    z = pd.Series(0, index=dc.index)
+                outliers = z[z > 1.5]
+
+                col1, col2 = st.columns(2)
+                col1.metric("Average losses per DSP", f"{mu:.1f}")
+                col2.metric("DSPs tracked", len(dc))
+
+                tbl = pd.DataFrame({
+                    "DSP": dc.index,
+                    "Losses": dc.values,
+                    "How far above average": z.values.round(1),
+                    "Verdict": ["🎯 OUTLIER — investigate" if x > 1.5 else "✅ Normal range" for x in z.values]
+                })
+                tbl.index = range(1, len(tbl)+1)
+                st.dataframe(tbl, use_container_width=True)
+
+                if len(outliers) > 0:
+                    st.error(f"🎯 **{len(outliers)} DSP(s) are losing way more than peers:**")
+                    for dsp, zv in outliers.items():
+                        cost = otr[otr["DSP Name"] == dsp]["Cost (£)"].sum()
+                        reason = otr[otr["DSP Name"] == dsp]["Loss Reason"].dropna().value_counts()
+                        r_str = reason.index[0] if len(reason) > 0 else "Unknown"
+                        st.markdown(f"- **{dsp}** — {int(dc[dsp])} losses ({fmt_cost(cost)}). Top reason: _{r_str}_")
+                        findings.append(f"DSP '{dsp}' is an outlier: {int(dc[dsp])} losses ({fmt_cost(cost)}), top reason: {r_str}. Raise in next DSP performance review.")
+                    st.markdown("**What does this mean?** These DSPs are losing significantly more than their peers. Raise in DSP reviews — ask if it's a driver, route, or vehicle issue.")
+                else:
+                    st.success("✅ **No outliers** — losses are spread fairly evenly across DSPs.")
+                    st.markdown("**What does this mean?** The problem isn't one bad DSP. Look at routes, package types, or time-of-day instead.")
             else:
-                st.warning("⚠️ Need 3+ DSPs with losses to detect outliers meaningfully.")
+                st.warning("Need 3+ DSPs with losses to compare meaningfully.")
         else:
-            st.warning(f"⚠️ Need 5+ OTR (on-road) parcels to run this test (currently have {len(otr)}).")
+            st.warning(f"Need 5+ OTR parcels (have {len(otr)}).")
 
-    # 5. DAY-OF-WEEK PATTERN
-    with st.expander("📅 Test 5: Day-of-Week Pattern — Do losses spike on certain days?"):
-        st.markdown("""
-**What this tells you:** Are there days when significantly more parcels go missing? If so, it could 
-point to staffing patterns, volume spikes, or handover issues on specific days.
-
-**How to interpret:**
-- Same as the shift test — uses a chi-squared test comparing actual losses per day vs. what you'd 
-  expect if losses were spread evenly (total ÷ 7).
-- **p < 0.05** = 🎯 The day pattern is real, not random.
-- **p > 0.05** = Day-to-day variation is just noise.
-""")
+    # ─── 5. ANY PROBLEM DAYS? ─────────────────────────────────────────────
+    with st.expander("📅 5. Do losses spike on certain days of the week?"):
+        st.caption("If one day is consistently worse, something is different that day — staffing, volume, handovers, etc.")
         if "Day of Week" in df.columns:
-            dc2 = df["Day of Week"].dropna().value_counts().reindex(DAY_ORDER,fill_value=0); dt = dc2.sum()
-            if dt>=14:
-                exp = np.array([dt/7]*7); obs = np.array([dc2[d] for d in DAY_ORDER])
-                chi2d, pd2 = sp_stats.chisquare(obs,f_exp=exp)
-                
-                if pd2<0.05:
+            dc2 = df["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
+            dt = dc2.sum()
+            if dt >= 14:
+                exp = np.array([dt/7]*7)
+                obs = np.array([dc2[d] for d in DAY_ORDER])
+                chi2d, pd2 = sp_stats.chisquare(obs, f_exp=exp)
+
+                tbl = pd.DataFrame({
+                    "Day": DAY_ORDER,
+                    "Losses": [int(dc2[d]) for d in DAY_ORDER],
+                    "Expected (if equal)": [int(dt/7)]*7,
+                    "Difference": (obs - exp).astype(int)
+                })
+                tbl.index = range(1, 8)
+                st.dataframe(tbl, use_container_width=True)
+
+                if pd2 < 0.05:
                     wd = dc2.idxmax(); wn = int(dc2.max())
-                    st.error(f"🎯 **Statistically significant** (p = {pd2:.4f}) — day-of-week pattern is real.")
-                    st.markdown(f"**{wd}** is the worst day: {wn} losses vs expected {dt/7:.0f}.")
-                    findings.append(f"Day variation significant (p={pd2:.3f}). {wd} has {wn} losses vs expected {dt/7:.0f}. Something different on {wd}s (staffing, volume, handover).")
-                    st.markdown(f"**🔑 Action:** Investigate what's different on **{wd}s** — volume spike? Different staffing? New process? Handover issues from prior day?")
+                    st.error(f"🎯 **Yes — {wd} is significantly worse!** {wn} losses vs ~{int(dt/7)} expected (p={pd2:.3f}).")
+                    st.markdown(f"**What does this mean?** Something is genuinely different on {wd}s. "
+                               f"Think about: volume spikes, different staff, handover issues from the day before, or end-of-week fatigue.")
+                    findings.append(f"{wd} has {wn} losses vs expected {int(dt/7)} — significant (p={pd2:.3f}). Investigate what's different on {wd}s.")
                 else:
-                    st.success(f"✅ **Not significant** (p = {pd2:.2f}) — losses are evenly spread across the week.")
-                    st.markdown("**🔑 Action:** No day-specific intervention needed.")
-                
-                tbl = pd.DataFrame({"Day":DAY_ORDER,"Losses":[int(dc2[d]) for d in DAY_ORDER],"Expected":[int(dt/7)]*7})
-                tbl["Difference"] = tbl["Losses"] - tbl["Expected"]
-                tbl.index = range(1,8); st.dataframe(tbl,use_container_width=True)
+                    st.success(f"✅ **No — day-to-day differences are just normal variation** (p={pd2:.2f}).")
+                    st.markdown("**What does this mean?** Losses don't depend on the day. The problem is consistent across the week.")
             else:
-                st.warning(f"⚠️ Need 14+ parcels with dates (currently have {dt}). Upload at least 2 weeks of data.")
+                st.warning(f"Need 14+ dated parcels (have {dt}). Upload at least 2 weeks.")
         else:
-            st.warning("⚠️ No date information available in the data.")
+            st.warning("No date data available.")
 
-    # 6. SIZE ANALYSIS
-    with st.expander("📏 Test 6: Package Size — Are oversized items more likely to be lost?"):
-        st.markdown("""
-**What this tells you:** Larger parcels may be harder to stow correctly, more likely to fall off 
-shelves, or more prone to misplacement. This checks whether oversized items are **over-represented** 
-in your loss data compared to what you'd normally expect (~15-20% of volume).
-
-**How to interpret:**
-- If oversized parcels make up >30% of losses, there's likely a physical handling/stow problem.
-- Compare against your station's overall size mix (from SCC data) if available.
-""")
+    # ─── 6. IS SIZE A FACTOR? ─────────────────────────────────────────────
+    with st.expander("📏 6. Are big parcels getting lost more often?"):
+        st.caption("Large items can be harder to stow and easier to misplace. This checks if oversized parcels are over-represented in your losses.")
         sc3 = df["Size Category"].value_counts()
-        if len(sc3)>=2:
-            ov = sc3.get("Small Oversize",0)+sc3.get("Large Oversize",0); ov_pct = round(ov/total*100,1)
-            ov_cost = df[df["Size Category"].isin(["Small Oversize","Large Oversize"])]["Cost (£)"].sum()
-            
-            if ov_pct > 30:
-                st.error(f"🎯 **Oversized parcels = {ov_pct}%** of losses — well above the typical 15-20% station mix.")
-                st.markdown(f"**{ov} oversized parcels** lost, costing **{fmt_cost(ov_cost)}**")
-                findings.append(f"Oversized parcels = {ov_pct}% of losses (above typical ~15-20%). Large items may not fit standard stow, increasing loss risk.")
-                st.markdown("**🔑 Action:** Check oversize stow areas — are they full? Damaged? Poorly labelled? Consider dedicated oversize zones or cage assignments.")
-            elif ov_pct > 20:
-                st.warning(f"⚠️ **Oversized parcels = {ov_pct}%** — slightly elevated. Worth monitoring.")
-                st.markdown(f"**{ov} oversized parcels** lost, costing **{fmt_cost(ov_cost)}**")
-            else:
-                st.success(f"✅ **Oversized parcels = {ov_pct}%** — within normal range.")
-            
-            stbl = df.groupby("Size Category").agg(Count=("Tracking ID","count"),Cost=("Cost (£)","sum")).sort_values("Count",ascending=False).reset_index()
-            stbl["% of Total"] = (stbl["Count"]/total*100).round(1)
-            stbl["Cost"] = stbl["Cost"].apply(fmt_cost); stbl.index = range(1,len(stbl)+1)
-            st.dataframe(stbl,use_container_width=True)
-        else:
-            st.warning("⚠️ Need package dimension data in SCC export (Package Length/Width/Height columns).")
+        if len(sc3) >= 2:
+            ov = sc3.get("Small Oversize", 0) + sc3.get("Large Oversize", 0)
+            ov_pct = round(ov / total * 100, 1)
+            ov_cost = df[df["Size Category"].isin(["Small Oversize", "Large Oversize"])]["Cost (£)"].sum()
 
-    # ─── FINDINGS SUMMARY ────────────────────────────────────────────────
+            stbl = df.groupby("Size Category").agg(
+                Count=("Tracking ID", "count"), Cost=("Cost (£)", "sum")
+            ).sort_values("Count", ascending=False).reset_index()
+            stbl["% of losses"] = (stbl["Count"] / total * 100).round(1)
+            stbl["Cost"] = stbl["Cost"].apply(fmt_cost)
+            stbl.index = range(1, len(stbl)+1)
+            st.dataframe(stbl, use_container_width=True)
+
+            if ov_pct > 30:
+                st.error(f"🎯 **Yes! Oversized = {ov_pct}%** of losses (normal is ~15-20%). {ov} parcels, costing {fmt_cost(ov_cost)}.")
+                st.markdown("**What does this mean?** Large parcels are getting lost at a much higher rate. "
+                           "Check: are oversize stow areas full? Damaged? Poorly labelled? Consider dedicated oversize zones.")
+                findings.append(f"Oversized parcels = {ov_pct}% of losses (above normal ~15-20%), costing {fmt_cost(ov_cost)}. Check oversize stow capacity and labelling.")
+            elif ov_pct > 20:
+                st.warning(f"⚠️ **Slightly elevated:** Oversized = {ov_pct}% (normal is ~15-20%). Worth monitoring.")
+            else:
+                st.success(f"✅ **No — oversized = {ov_pct}%** which is within normal range.")
+                st.markdown("**What does this mean?** Package size isn't a major factor in your losses.")
+        else:
+            st.warning("Need package dimension data (Package Length/Width/Height in SCC).")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # SUMMARY — WHAT TO DO
+    # ═══════════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("### 📝 Key Findings & Recommended Actions")
-    st.markdown("""
-> **These are your statistically-backed conclusions.** Each finding below is supported by the data 
-> and is unlikely to be due to random chance. Use these to prioritise your problem-solving.
-""")
+    st.markdown("#### 📝 Summary — Your Top Actions")
     if findings:
-        for i,f in enumerate(findings,1):
+        st.markdown("These are the key findings from your data. Each one is backed by the numbers above:")
+        for i, f in enumerate(findings, 1):
             st.markdown(f"**{i}.** {f}")
         st.markdown("---")
-        st.markdown("#### 💡 What To Do Next")
+        st.markdown("**Next steps:**")
         st.markdown("""
-1. **Pick the highest-impact finding** (biggest £ value or easiest to fix)
-2. **Go and observe** — walk the area, watch the process, talk to the team
-3. **Identify the specific failure point** — where exactly in the process does the parcel get lost?
-4. **Implement a countermeasure** — process change, visual management, training, physical fix
-5. **Measure again** — upload new data in 1-2 weeks to see if it improved
+1. **Pick one** — start with whichever is easiest to investigate or highest cost
+2. **Go look** — walk the area, watch the process, talk to the team
+3. **Find the why** — where exactly does the parcel get lost?
+4. **Fix it** — process change, visual management, training, physical fix
+5. **Check again** — upload fresh data in 1-2 weeks and re-run this analysis
 """)
     else:
-        st.info("ℹ️ No statistically significant root causes found with current data. This could mean:")
-        st.markdown("""
-- Losses are genuinely random (no single pattern dominates)
-- The dataset is too small to detect patterns — **upload a larger date range** (2+ weeks recommended)
-- Root causes may be at a more granular level than this analysis checks — use the other tabs for manual exploration
-""")
+        st.info("No strong patterns found. This could mean losses are genuinely random, or the data is too small. Try uploading 2+ weeks of data for stronger results.")
 
 def generate_bridge(df, total, dr):
     tc = df["Cost (£)"].sum(); avg = tc/total if total>0 else 0
