@@ -55,8 +55,7 @@ def clean_scc(df):
     df = df.drop(columns=[c for c in ["Last Scan By","Driver Id"] if c in df.columns])
     for col in ["Package Length","Package Width","Package Height"]:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(" cm","").str.replace("cm","")
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(r"\s*cm", "", regex=True), errors="coerce")
     dims = ["Package Length","Package Width","Package Height"]
     df["Longest Side"] = df[dims].max(axis=1) if all(c in df.columns for c in dims) else float("nan")
     df["Size Category"] = df["Longest Side"].apply(get_size)
@@ -72,7 +71,7 @@ def merge_data(pm_df, scc_df):
     pm_cols = pm_cols.rename(columns={"tracking_id":"Tracking ID"})
     pm_cols["Prev Event DT"] = pd.to_datetime(pm_cols.get("previous_event_datetime", pd.Series(dtype="object")), format="%d/%m/%Y %H:%M", errors="coerce")
     if "event_datetime" in pm_cols.columns: pm_cols["Marked Lost DT"] = pd.to_datetime(pm_cols["event_datetime"], dayfirst=True, errors="coerce")
-    if "shipment_value" in pm_cols.columns: pm_cols["Cost (£)"] = pd.to_numeric(pm_cols["shipment_value"], errors="coerce")
+    if "shipment_value" in pm_cols.columns: pm_cols["Cost (£)"] = pd.to_numeric(pm_cols["shipment_value"].astype(str), errors="coerce")
     merged = pm_cols.merge(scc_clean, on="Tracking ID", how="left")
     merged["Sub Bucket"] = merged["sub_bucket"]; merged["Bucket"] = merged.get("bucket")
     merged["Type"] = merged["Sub Bucket"].apply(classify_otr_utr)
@@ -369,15 +368,15 @@ def render_analysis_tab(df, total, dr, kp=""):
     if findings:
         for i,f in enumerate(findings,1): st.markdown(f"**{i}.** {f}")
     else: st.info("No significant root causes found. Upload more data (larger date range) for stronger analysis.")
-    # DATA SUFFICIENCY
+    # DATA SUFFICIENCY — FIX: all tuples must have same length (3 elements)
     st.markdown("---"); st.markdown("### 📊 Data Sufficiency")
-    checks = [("Concentration","✅" if len(df["Cluster"].dropna().value_counts())>=2 else "❌"),
-              ("Shift significance","✅" if df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].count()>=20 else "❌ need 20+"),
-              ("DSP outliers","✅" if len(df[df["Type"]=="OTR"])>=5 else "❌ need 5+ OTR"),
-              ("Day pattern","✅" if df["Day of Week"].dropna().count()>=14 else "❌ need 14+"),
+    checks = [("Concentration","✅" if len(df["Cluster"].dropna().value_counts())>=2 else "❌",""),
+              ("Shift significance","✅" if df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].count()>=20 else "❌ need 20+",""),
+              ("DSP outliers","✅" if len(df[df["Type"]=="OTR"])>=5 else "❌ need 5+ OTR",""),
+              ("Day pattern","✅" if df["Day of Week"].dropna().count()>=14 else "❌ need 14+",""),
               ("Trend analysis","❌ need 2+ weeks uploaded","Upload larger date range"),
               ("Forecasting","❌ need 4+ weeks","Upload 4+ weeks")]
-    st.dataframe(pd.DataFrame(checks,columns=["Test","Status","Fix"] if len(checks[0])==3 else ["Test","Status"]),use_container_width=True)
+    st.dataframe(pd.DataFrame(checks,columns=["Test","Status","Fix"]),use_container_width=True)
 
 def generate_bridge(df, total, dr):
     tc = df["Cost (£)"].sum(); avg = tc/total if total>0 else 0
@@ -419,7 +418,7 @@ def generate_bridge(df, total, dr):
             if len(outs)>0: lines.append(f"  DSP outliers: {', '.join(outs.index.tolist())}")
     return "\n".join(lines)
 
-# ─── MAIN ────────────────────────────────────────────────────────────────────
+# ─── MAIN ──────────────────────────────────────────────────────────────────
 mode = st.radio("Mode:",["Single Station","Multi-Station"],horizontal=True,key="mode")
 with st.expander("📖 How to get data"):
     st.markdown("1. PerfectMile → L&U → Lost → Export\n2. SCC → paste TIDs → Export\n3. Upload both")
