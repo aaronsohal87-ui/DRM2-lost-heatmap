@@ -399,6 +399,7 @@ def generate_bridge(df, total, dr):
         cc = df[df["Cluster"]==cn]["Cost (£)"].sum()
         ta = df[df["Cluster"]==cn]["Aisle"].dropna().value_counts().head(3)
         lines.append(f"  {cn}: {cv} ({round(int(cv)/total*100,1)}%) — {fmt_cost(cc)} — {', '.join([f'{a}({n})' for a,n in ta.items()])}")
+    # Stats summary
     lines += ["","STATISTICAL FINDINGS:"]
     cl_c = df["Cluster"].dropna().value_counts()
     if len(cl_c)>=3:
@@ -418,7 +419,7 @@ def generate_bridge(df, total, dr):
             if len(outs)>0: lines.append(f"  DSP outliers: {', '.join(outs.index.tolist())}")
     return "\n".join(lines)
 
-# ─── MAIN ─────────────────────────────────────────────────────────────────────
+# ─── MAIN ────────────────────────────────────────────────────────────────────
 mode = st.radio("Mode:",["Single Station","Multi-Station"],horizontal=True,key="mode")
 with st.expander("📖 How to get data"):
     st.markdown("1. PerfectMile → L&U → Lost → Export\n2. SCC → paste TIDs → Export\n3. Upload both")
