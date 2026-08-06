@@ -265,20 +265,27 @@ def render_cost_tab(df, total, dr, kp=""):
         out = top[sc2].reset_index(drop=True); out.index = range(1,len(out)+1); st.dataframe(out,use_container_width=True)
 
 def render_analysis_tab(df, total, dr, kp=""):
-    """Simple, user-friendly root cause analysis."""
-    st.markdown("### 🔬 Root Cause Analysis")
-    st.info("💡 **This page answers one question: WHERE should we focus to reduce lost parcels the most?** "
-            "Each section below looks at your data from a different angle. Look for the 🎯 icons — those are the key findings.")
+    """Simple, user-friendly root cause analysis with bridge summary."""
+    st.markdown("### 🔬 Analysis & Bridge")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # DISCLAIMER
+    # ═══════════════════════════════════════════════════════════════════════
+    st.warning(
+        "⚠️ This section helps you process the vast amount of data and offers some suggestions, "
+        "but **SHOULD NOT BE USED AS A GUIDE, IT IS ONLY AN AID.** "
+        "Always use your own judgement and local knowledge when deciding on actions."
+    )
 
     total_cost = df["Cost (£)"].sum()
     findings = []
 
     # ═══════════════════════════════════════════════════════════════════════
-    # DATA SUFFICIENCY — AT THE TOP
+    # DATA SUFFICIENCY
     # ═══════════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown("#### 📋 Do we have enough data?")
-    st.caption("More data = more reliable results. Green = good to go. Red = need more uploads.")
+    st.caption("Green = good to go. Red = need more uploads for that test to work.")
 
     cluster_count = len(df["Cluster"].dropna().value_counts())
     shift_count = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].count()
@@ -293,26 +300,27 @@ def render_analysis_tab(df, total, dr, kp=""):
         ("Any problem DSPs?", "✅ Ready" if otr_count >= 5 else f"❌ Need 5+ OTR (have {otr_count})", "Upload more data"),
         ("Any problem days?", "✅ Ready" if day_count >= 14 else f"❌ Need 14+ parcels (have {day_count})", "Upload 2+ weeks"),
         ("Size a factor?", "✅ Ready" if size_count >= 2 else "❌ Need size data", "Check SCC has dimensions"),
+        ("Repeat offender aisles?", "✅ Ready" if cluster_count >= 2 else "❌ Need cluster data", ""),
     ]
 
     ready = sum(1 for _, s, _ in checks if "✅" in s)
     if ready == len(checks):
-        st.success(f"✅ All {len(checks)} tests ready to run!")
+        st.success(f"✅ All {len(checks)} tests ready!")
     else:
-        st.warning(f"⚠️ {ready}/{len(checks)} tests ready. Upload more data to unlock the rest.")
+        st.info(f"{ready}/{len(checks)} tests ready. Upload more data to unlock the rest.")
 
     check_df = pd.DataFrame(checks, columns=["Question", "Status", "How to fix"])
     st.dataframe(check_df, use_container_width=True, hide_index=True)
 
     # ═══════════════════════════════════════════════════════════════════════
-    # THE ACTUAL ANALYSIS — SIMPLE LANGUAGE
+    # RESULTS
     # ═══════════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("#### 🎯 Results")
+    st.markdown("#### 🎯 What the data suggests")
+    st.caption("Look for 🎯 = key finding. These are patterns in the data, not instructions.")
 
-    # ─── 1. WHERE are losses happening? ───────────────────────────────────
+    # ─── 1. WHERE ─────────────────────────────────────────────────────────
     with st.expander("📍 1. Where are most losses happening?", expanded=True):
-        st.caption("Are losses spread out, or piling up in a few places?")
         cl_c = df["Cluster"].dropna().value_counts()
         if len(cl_c) >= 2:
             top3 = cl_c.head(3)
@@ -320,20 +328,16 @@ def render_analysis_tab(df, total, dr, kp=""):
             top3_cost = df[df["Cluster"].isin(top3.index)]["Cost (£)"].sum()
             top3_names = ", ".join(top3.index.tolist())
 
-            # Simple Gini
             vals = cl_c.values.astype(float); n = len(vals)
             sv = np.sort(vals)
             gini = (2 * np.sum(np.arange(1, n+1) * sv) - (n+1) * np.sum(sv)) / (n * np.sum(sv))
 
             if gini > 0.5:
-                st.error(f"🎯 **Heavily concentrated!** Just 3 clusters account for **{top3_pct}%** of all losses.")
-                verdict = "Losses are piling up in a few spots. Fix these first for biggest impact."
+                st.error(f"🎯 Losses are piling up in a few spots. Top 3 clusters = **{top3_pct}%** of all losses.")
             elif gini > 0.3:
-                st.warning(f"⚠️ **Somewhat concentrated.** Top 3 clusters = **{top3_pct}%** of losses.")
-                verdict = "Some areas are worse than others. Worth targeting the top 3."
+                st.warning(f"⚠️ Some areas worse than others. Top 3 = **{top3_pct}%** of losses.")
             else:
-                st.info(f"ℹ️ **Spread out.** Top 3 clusters = only {top3_pct}% of losses.")
-                verdict = "No single area dominates. Look at shifts or DSPs instead."
+                st.info(f"ℹ️ Losses fairly spread out. Top 3 = {top3_pct}%.")
 
             col1, col2 = st.columns(2)
             with col1:
@@ -342,15 +346,13 @@ def render_analysis_tab(df, total, dr, kp=""):
             with col2:
                 st.metric("Cost in those 3", fmt_cost(top3_cost))
 
-            st.markdown(f"**Bottom line:** {verdict}")
             if gini > 0.3:
-                findings.append(f"Top 3 clusters ({top3_names}) = {top3_pct}% of losses, costing {fmt_cost(top3_cost)}. Walk these areas — look for stow density, cage, or layout issues.")
+                findings.append(f"Top 3 clusters ({top3_names}) = {top3_pct}% of losses, costing {fmt_cost(top3_cost)}")
         else:
-            st.warning("Not enough location data to analyse.")
+            st.warning("Not enough location data.")
 
-    # ─── 2. WHICH SHIFT is worst? ────────────────────────────────────────
+    # ─── 2. SHIFT ─────────────────────────────────────────────────────────
     with st.expander("⏰ 2. Is one shift losing more than it should?"):
-        st.caption("If losses were random, each shift would lose roughly the same. This checks if one shift is genuinely worse — or if it's just luck.")
         shift_counts = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts().reindex(SHIFT_ORDER, fill_value=0)
         assigned = shift_counts.sum()
         if assigned >= 20:
@@ -363,67 +365,54 @@ def render_analysis_tab(df, total, dr, kp=""):
 
             tbl = pd.DataFrame({
                 "Shift": SHIFT_ORDER,
-                "Actual losses": observed.astype(int),
-                "Expected (if equal)": expected.astype(int),
+                "Actual": observed.astype(int),
+                "Expected": expected.astype(int),
                 "Over/Under": (observed - expected).astype(int)
             })
             tbl.index = range(1, 5)
             st.dataframe(tbl, use_container_width=True)
 
             if p < 0.05:
-                st.error(f"🎯 **Yes — {worst_s} shift is significantly worse!** "
-                         f"It has {worst_n} losses vs ~{int(expected_per_shift)} expected. "
-                         f"This is very unlikely to be random (p={p:.3f}).")
-                st.markdown(f"**What does this mean?** There's a real process gap during **{worst_s}** ({SHIFT_DEFINITIONS[worst_s]}). "
-                           f"Investigate: staffing, compliance, handover quality, or volume spikes in that window.")
-                findings.append(f"{worst_s} shift has {worst_n} losses vs expected {int(expected_per_shift)} — statistically significant (p={p:.3f}). Investigate process during {SHIFT_DEFINITIONS[worst_s]}.")
+                st.error(f"🎯 **{worst_s}** shift has {worst_n} losses vs ~{int(expected_per_shift)} expected. This pattern is unlikely to be random.")
+                st.caption(f"Window: {SHIFT_DEFINITIONS[worst_s]}")
+                findings.append(f"{worst_s} shift has {worst_n} losses vs expected {int(expected_per_shift)} — not random")
             else:
-                st.success(f"✅ **No — shift differences are just normal variation** (p={p:.2f}). No single shift stands out.")
-                st.markdown("**What does this mean?** The spread across shifts looks random. Don't focus on one specific shift — the problem is elsewhere.")
+                st.success(f"✅ Shift differences look like normal variation. No single shift stands out.")
         else:
-            st.warning(f"Need 20+ parcels with shift data (have {assigned}). Upload more.")
+            st.warning(f"Need 20+ parcels with shift data (have {assigned}).")
 
-    # ─── 3. WHICH LOSS TYPE costs the most per parcel? ────────────────────
+    # ─── 3. COST ──────────────────────────────────────────────────────────
     with st.expander("💰 3. Which loss types hit the most expensive parcels?"):
-        st.caption("Some loss types might affect cheaper parcels, others hit the expensive ones. This finds where the money is.")
         sb_s = df.groupby("Sub Bucket").agg(Count=("Tracking ID","count"), Cost=("Cost (£)","sum")).reset_index()
         if len(sb_s) >= 2 and total_cost > 0:
             sb_s["Avg £/parcel"] = (sb_s["Cost"] / sb_s["Count"]).round(2)
             overall_avg = total_cost / total
-            sb_s["vs Average"] = sb_s["Avg £/parcel"].apply(
-                lambda x: "🔴 Much higher" if x > overall_avg * 1.5
-                else ("🟡 Slightly higher" if x > overall_avg * 1.1 else "🟢 Normal")
-            )
             sb_s = sb_s.sort_values("Avg £/parcel", ascending=False)
-
             high = sb_s[sb_s["Avg £/parcel"] > overall_avg * 1.5]
-            if len(high) > 0:
-                st.error(f"🎯 **{len(high)} loss type(s)** are hitting expensive parcels:")
-                for _, row in high.iterrows():
-                    st.markdown(f"- **{row['Sub Bucket']}** — avg {fmt_cost(row['Avg £/parcel'])} per parcel (station avg is {fmt_cost(overall_avg)})")
-                    findings.append(f"{row['Sub Bucket']} loses expensive parcels (avg {fmt_cost(row['Avg £/parcel'])} vs {fmt_cost(overall_avg)} station avg). Prioritise preventing this type.")
-                st.markdown("**What does this mean?** Even a small reduction in these loss types saves more money per parcel than fixing other types.")
-            else:
-                st.success("✅ **All loss types affect similarly-priced parcels.** No single type is hitting expensive items disproportionately.")
-                st.markdown("**What does this mean?** Focus on the most frequent loss type rather than chasing high-value ones.")
 
-            display = sb_s[["Sub Bucket", "Count", "Avg £/parcel", "vs Average"]].copy()
+            if len(high) > 0:
+                st.error(f"🎯 {len(high)} loss type(s) are hitting expensive parcels:")
+                for _, row in high.iterrows():
+                    st.markdown(f"- **{row['Sub Bucket']}** — avg {fmt_cost(row['Avg £/parcel'])}/parcel vs station avg {fmt_cost(overall_avg)}")
+                    findings.append(f"{row['Sub Bucket']} avg {fmt_cost(row['Avg £/parcel'])}/parcel (station avg {fmt_cost(overall_avg)})")
+            else:
+                st.success("✅ All loss types hit similarly-priced parcels. No standout.")
+
+            display = sb_s[["Sub Bucket", "Count", "Avg £/parcel"]].copy()
             display["Avg £/parcel"] = display["Avg £/parcel"].apply(fmt_cost)
             display.index = range(1, len(display)+1)
             st.dataframe(display, use_container_width=True)
             st.caption(f"Station average: {fmt_cost(overall_avg)} per lost parcel")
         else:
-            st.warning("Need cost data and 2+ loss types to run this.")
+            st.warning("Need cost data and 2+ loss types.")
 
-    # ─── 4. ANY PROBLEM DSPs? ─────────────────────────────────────────────
-    with st.expander("🚚 4. Is any DSP losing way more than the others?"):
-        st.caption("Compares each DSP against the average. If one DSP is way above, they're an 'outlier' — worth a conversation.")
+    # ─── 4. DSP ───────────────────────────────────────────────────────────
+    with st.expander("🚚 4. Is any DSP losing way more than others?"):
         otr = df[df["Type"] == "OTR"]
         if len(otr) >= 5:
             dc = otr["DSP Name"].dropna().value_counts()
             if len(dc) >= 3:
-                mu = dc.mean()
-                sigma = dc.std()
+                mu = dc.mean(); sigma = dc.std()
                 if sigma > 0:
                     z = (dc - mu) / sigma
                 else:
@@ -431,38 +420,34 @@ def render_analysis_tab(df, total, dr, kp=""):
                 outliers = z[z > 1.5]
 
                 col1, col2 = st.columns(2)
-                col1.metric("Average losses per DSP", f"{mu:.1f}")
+                col1.metric("Avg losses/DSP", f"{mu:.1f}")
                 col2.metric("DSPs tracked", len(dc))
 
                 tbl = pd.DataFrame({
                     "DSP": dc.index,
                     "Losses": dc.values,
-                    "How far above average": z.values.round(1),
-                    "Verdict": ["🎯 OUTLIER — investigate" if x > 1.5 else "✅ Normal range" for x in z.values]
+                    "Verdict": ["🎯 Well above average" if x > 1.5 else "✅ Normal" for x in z.values]
                 })
                 tbl.index = range(1, len(tbl)+1)
                 st.dataframe(tbl, use_container_width=True)
 
                 if len(outliers) > 0:
-                    st.error(f"🎯 **{len(outliers)} DSP(s) are losing way more than peers:**")
+                    st.error(f"🎯 {len(outliers)} DSP(s) losing much more than peers:")
                     for dsp, zv in outliers.items():
                         cost = otr[otr["DSP Name"] == dsp]["Cost (£)"].sum()
                         reason = otr[otr["DSP Name"] == dsp]["Loss Reason"].dropna().value_counts()
                         r_str = reason.index[0] if len(reason) > 0 else "Unknown"
-                        st.markdown(f"- **{dsp}** — {int(dc[dsp])} losses ({fmt_cost(cost)}). Top reason: _{r_str}_")
-                        findings.append(f"DSP '{dsp}' is an outlier: {int(dc[dsp])} losses ({fmt_cost(cost)}), top reason: {r_str}. Raise in next DSP performance review.")
-                    st.markdown("**What does this mean?** These DSPs are losing significantly more than their peers. Raise in DSP reviews — ask if it's a driver, route, or vehicle issue.")
+                        st.markdown(f"- **{dsp}** — {int(dc[dsp])} losses ({fmt_cost(cost)}), top reason: _{r_str}_")
+                        findings.append(f"DSP '{dsp}': {int(dc[dsp])} losses ({fmt_cost(cost)}), reason: {r_str}")
                 else:
-                    st.success("✅ **No outliers** — losses are spread fairly evenly across DSPs.")
-                    st.markdown("**What does this mean?** The problem isn't one bad DSP. Look at routes, package types, or time-of-day instead.")
+                    st.success("✅ No outliers — losses spread fairly across DSPs.")
             else:
-                st.warning("Need 3+ DSPs with losses to compare meaningfully.")
+                st.warning("Need 3+ DSPs to compare.")
         else:
             st.warning(f"Need 5+ OTR parcels (have {len(otr)}).")
 
-    # ─── 5. ANY PROBLEM DAYS? ─────────────────────────────────────────────
-    with st.expander("📅 5. Do losses spike on certain days of the week?"):
-        st.caption("If one day is consistently worse, something is different that day — staffing, volume, handovers, etc.")
+    # ─── 5. DAY ───────────────────────────────────────────────────────────
+    with st.expander("📅 5. Do losses spike on certain days?"):
         if "Day of Week" in df.columns:
             dc2 = df["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
             dt = dc2.sum()
@@ -474,29 +459,24 @@ def render_analysis_tab(df, total, dr, kp=""):
                 tbl = pd.DataFrame({
                     "Day": DAY_ORDER,
                     "Losses": [int(dc2[d]) for d in DAY_ORDER],
-                    "Expected (if equal)": [int(dt/7)]*7,
-                    "Difference": (obs - exp).astype(int)
+                    "Expected": [int(dt/7)]*7
                 })
                 tbl.index = range(1, 8)
                 st.dataframe(tbl, use_container_width=True)
 
                 if pd2 < 0.05:
                     wd = dc2.idxmax(); wn = int(dc2.max())
-                    st.error(f"🎯 **Yes — {wd} is significantly worse!** {wn} losses vs ~{int(dt/7)} expected (p={pd2:.3f}).")
-                    st.markdown(f"**What does this mean?** Something is genuinely different on {wd}s. "
-                               f"Think about: volume spikes, different staff, handover issues from the day before, or end-of-week fatigue.")
-                    findings.append(f"{wd} has {wn} losses vs expected {int(dt/7)} — significant (p={pd2:.3f}). Investigate what's different on {wd}s.")
+                    st.error(f"🎯 **{wd}** is the worst day: {wn} losses vs ~{int(dt/7)} expected.")
+                    findings.append(f"{wd} has {wn} losses vs expected {int(dt/7)}")
                 else:
-                    st.success(f"✅ **No — day-to-day differences are just normal variation** (p={pd2:.2f}).")
-                    st.markdown("**What does this mean?** Losses don't depend on the day. The problem is consistent across the week.")
+                    st.success("✅ No day stands out — losses spread evenly across the week.")
             else:
-                st.warning(f"Need 14+ dated parcels (have {dt}). Upload at least 2 weeks.")
+                st.warning(f"Need 14+ dated parcels (have {dt}).")
         else:
             st.warning("No date data available.")
 
-    # ─── 6. IS SIZE A FACTOR? ─────────────────────────────────────────────
-    with st.expander("📏 6. Are big parcels getting lost more often?"):
-        st.caption("Large items can be harder to stow and easier to misplace. This checks if oversized parcels are over-represented in your losses.")
+    # ─── 6. SIZE ──────────────────────────────────────────────────────────
+    with st.expander("📏 6. Are big parcels getting lost more?"):
         sc3 = df["Size Category"].value_counts()
         if len(sc3) >= 2:
             ov = sc3.get("Small Oversize", 0) + sc3.get("Large Oversize", 0)
@@ -512,77 +492,110 @@ def render_analysis_tab(df, total, dr, kp=""):
             st.dataframe(stbl, use_container_width=True)
 
             if ov_pct > 30:
-                st.error(f"🎯 **Yes! Oversized = {ov_pct}%** of losses (normal is ~15-20%). {ov} parcels, costing {fmt_cost(ov_cost)}.")
-                st.markdown("**What does this mean?** Large parcels are getting lost at a much higher rate. "
-                           "Check: are oversize stow areas full? Damaged? Poorly labelled? Consider dedicated oversize zones.")
-                findings.append(f"Oversized parcels = {ov_pct}% of losses (above normal ~15-20%), costing {fmt_cost(ov_cost)}. Check oversize stow capacity and labelling.")
+                st.error(f"🎯 Oversized = **{ov_pct}%** of losses (normal ~15-20%). Costing {fmt_cost(ov_cost)}.")
+                findings.append(f"Oversized parcels = {ov_pct}% of losses ({fmt_cost(ov_cost)})")
             elif ov_pct > 20:
-                st.warning(f"⚠️ **Slightly elevated:** Oversized = {ov_pct}% (normal is ~15-20%). Worth monitoring.")
+                st.warning(f"⚠️ Oversized = {ov_pct}% — slightly elevated.")
             else:
-                st.success(f"✅ **No — oversized = {ov_pct}%** which is within normal range.")
-                st.markdown("**What does this mean?** Package size isn't a major factor in your losses.")
+                st.success(f"✅ Oversized = {ov_pct}% — within normal range.")
         else:
-            st.warning("Need package dimension data (Package Length/Width/Height in SCC).")
+            st.warning("Need package dimension data.")
+
+    # ─── 7. REPEAT OFFENDER AISLES ────────────────────────────────────────
+    with st.expander("🔁 7. Any repeat offender aisles? (same aisle losing multiple parcels)"):
+        aisle_c = df["Aisle"].dropna().value_counts()
+        if len(aisle_c) >= 2:
+            repeat = aisle_c[aisle_c >= 3]
+            if len(repeat) > 0:
+                st.error(f"🎯 **{len(repeat)} aisle(s)** lost 3+ parcels each:")
+                repeat_df = pd.DataFrame({"Aisle": repeat.index, "Losses": repeat.values})
+                repeat_df["Cost"] = [df[df["Aisle"]==a]["Cost (£)"].sum() for a in repeat.index]
+                repeat_df["Cost"] = repeat_df["Cost"].apply(fmt_cost)
+                repeat_df["Top Sub Bucket"] = [df[df["Aisle"]==a]["Sub Bucket"].value_counts().index[0] if len(df[df["Aisle"]==a]["Sub Bucket"].value_counts())>0 else "N/A" for a in repeat.index]
+                repeat_df.index = range(1, len(repeat_df)+1)
+                st.dataframe(repeat_df, use_container_width=True)
+                top_aisle = repeat.index[0]
+                findings.append(f"Aisle {top_aisle} lost {int(repeat.iloc[0])} parcels — repeat offender")
+            else:
+                st.success("✅ No single aisle has 3+ losses. Losses are spread out.")
+        else:
+            st.warning("Not enough aisle data.")
+
+    # ─── 8. UTR vs OTR SPLIT ─────────────────────────────────────────────
+    with st.expander("🏠🚚 8. Station (UTR) vs Road (OTR) — where's the bigger problem?"):
+        otr_n = len(df[df["Type"]=="OTR"]); utr_n = len(df[df["Type"]=="UTR"])
+        otr_cost = df[df["Type"]=="OTR"]["Cost (£)"].sum()
+        utr_cost = df[df["Type"]=="UTR"]["Cost (£)"].sum()
+        if otr_n + utr_n > 0:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("🏠 UTR (At Station)", f"{utr_n} parcels", fmt_cost(utr_cost))
+                st.caption(f"{round(utr_n/(otr_n+utr_n)*100,1)}% of losses")
+            with col2:
+                st.metric("🚚 OTR (On Road)", f"{otr_n} parcels", fmt_cost(otr_cost))
+                st.caption(f"{round(otr_n/(otr_n+utr_n)*100,1)}% of losses")
+
+            if utr_n > otr_n * 1.5:
+                st.error("🎯 Station losses (UTR) dominate. Focus on in-station processes.")
+                findings.append(f"UTR dominates: {utr_n} vs {otr_n} OTR — station processes are the bigger issue")
+            elif otr_n > utr_n * 1.5:
+                st.error("🎯 Road losses (OTR) dominate. Focus on DSPs and dispatch.")
+                findings.append(f"OTR dominates: {otr_n} vs {utr_n} UTR — road/DSP issues are bigger")
+            else:
+                st.info("ℹ️ Fairly balanced between station and road losses.")
+        else:
+            st.warning("No type data available.")
 
     # ═══════════════════════════════════════════════════════════════════════
-    # SUMMARY — WHAT TO DO
+    # BRIDGE SUMMARY (replaces old Bridge tab)
     # ═══════════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("#### 📝 Summary — Your Top Actions")
-    if findings:
-        st.markdown("These are the key findings from your data. Each one is backed by the numbers above:")
-        for i, f in enumerate(findings, 1):
-            st.markdown(f"**{i}.** {f}")
-        st.markdown("---")
-        st.markdown("**Next steps:**")
-        st.markdown("""
-1. **Pick one** — start with whichever is easiest to investigate or highest cost
-2. **Go look** — walk the area, watch the process, talk to the team
-3. **Find the why** — where exactly does the parcel get lost?
-4. **Fix it** — process change, visual management, training, physical fix
-5. **Check again** — upload fresh data in 1-2 weeks and re-run this analysis
-""")
-    else:
-        st.info("No strong patterns found. This could mean losses are genuinely random, or the data is too small. Try uploading 2+ weeks of data for stronger results.")
+    st.markdown("#### 📋 Bridge Summary")
+    st.caption("Auto-generated overview you can copy/paste into a bridge or handover doc.")
 
-def generate_bridge(df, total, dr):
-    tc = df["Cost (£)"].sum(); avg = tc/total if total>0 else 0
-    otr = df[df["Type"]=="OTR"]; utr = df[df["Type"]=="UTR"]
-    sh = df[df["Shift"]!="Unknown"]["Shift"].value_counts(); cl = df["Cluster"].dropna().value_counts()
+    otr_df = df[df["Type"]=="OTR"]; utr_df = df[df["Type"]=="UTR"]
+    cl = df["Cluster"].dropna().value_counts()
     sb = df["Sub Bucket"].value_counts()
-    lines = [f"LOST PARCELS BRIDGE — DRM2",f"Period: {dr}","",
-        f"TOTAL: {total} parcels — {fmt_cost(tc)} (avg {fmt_cost(avg)}/parcel)",
-        f"UTR (At Station): {len(utr)} ({round(len(utr)/total*100,1)}%) — {fmt_cost(utr['Cost (£)'].sum())}",
-        f"OTR (On Road): {len(otr)} ({round(len(otr)/total*100,1)}%) — {fmt_cost(otr['Cost (£)'].sum())}","",
-        "SHIFTS:"]
+
+    bridge_lines = []
+    bridge_lines.append(f"LOST PARCELS — DRM2 | Period: {dr}")
+    bridge_lines.append(f"TOTAL: {total} parcels — {fmt_cost(total_cost)} (avg {fmt_cost(total_cost/total if total>0 else 0)}/parcel)")
+    bridge_lines.append(f"UTR (Station): {len(utr_df)} ({round(len(utr_df)/total*100,1)}%) — {fmt_cost(utr_df['Cost (£)'].sum())}")
+    bridge_lines.append(f"OTR (Road): {len(otr_df)} ({round(len(otr_df)/total*100,1)}%) — {fmt_cost(otr_df['Cost (£)'].sum())}")
+    bridge_lines.append("")
+    bridge_lines.append("SHIFTS:")
     for s in SHIFT_ORDER:
         sd = df[df["Shift"]==s]; n = len(sd)
-        lines.append(f"  {s}: {n} ({round(n/total*100,1)}%) — {fmt_cost(sd['Cost (£)'].sum())}")
-    lines += ["","SUB BUCKETS:"]
-    for s,n in sb.head(6).items(): lines.append(f"  {s}: {n} ({round(int(n)/total*100,1)}%) — {fmt_cost(df[df['Sub Bucket']==s]['Cost (£)'].sum())}")
-    lines += ["","LOCATIONS (Top 3):"]
-    for cn,cv in cl.head(3).items():
+        bridge_lines.append(f"  {s}: {n} ({round(n/total*100,1)}%) — {fmt_cost(sd['Cost (£)'].sum())}")
+    bridge_lines.append("")
+    bridge_lines.append("TOP SUB BUCKETS:")
+    for s_name, n in sb.head(5).items():
+        bridge_lines.append(f"  {s_name}: {n} ({round(int(n)/total*100,1)}%) — {fmt_cost(df[df['Sub Bucket']==s_name]['Cost (£)'].sum())}")
+    bridge_lines.append("")
+    bridge_lines.append("TOP 3 CLUSTERS:")
+    for cn, cv in cl.head(3).items():
         cc = df[df["Cluster"]==cn]["Cost (£)"].sum()
         ta = df[df["Cluster"]==cn]["Aisle"].dropna().value_counts().head(3)
-        lines.append(f"  {cn}: {cv} ({round(int(cv)/total*100,1)}%) — {fmt_cost(cc)} — {', '.join([f'{a}({n})' for a,n in ta.items()])}")
-    lines += ["","STATISTICAL FINDINGS:"]
-    cl_c = df["Cluster"].dropna().value_counts()
-    if len(cl_c)>=3:
-        top3p = round(cl_c.head(3).sum()/cl_c.sum()*100,1)
-        lines.append(f"  Concentration: Top 3 clusters = {top3p}% of losses")
-    sc2 = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts().reindex(SHIFT_ORDER,fill_value=0)
-    if sc2.sum()>=20:
-        exp = np.array([sc2.sum()/4]*4); obs = np.array([sc2[s] for s in SHIFT_ORDER])
-        _,p = sp_stats.chisquare(obs,f_exp=exp)
-        ws = sc2.idxmax()
-        lines.append(f"  Shift test: {ws} dominant (p={p:.4f}, {'significant' if p<0.05 else 'not significant'})")
-    if len(df[df["Type"]=="OTR"])>=5:
-        dc3 = df[df["Type"]=="OTR"]["DSP Name"].dropna().value_counts()
-        if len(dc3)>=3:
-            mu = dc3.mean(); sig = dc3.std()
-            outs = dc3[(dc3-mu)/sig > 1.5] if sig>0 else pd.Series(dtype=float)
-            if len(outs)>0: lines.append(f"  DSP outliers: {', '.join(outs.index.tolist())}")
-    return "\n".join(lines)
+        bridge_lines.append(f"  {cn}: {cv} ({round(int(cv)/total*100,1)}%) — {fmt_cost(cc)} — Aisles: {', '.join([f'{a}({n})' for a,n in ta.items()])}")
+    if findings:
+        bridge_lines.append("")
+        bridge_lines.append("KEY FINDINGS:")
+        for i, f in enumerate(findings, 1):
+            bridge_lines.append(f"  {i}. {f}")
+
+    bridge_text = "\n".join(bridge_lines)
+    st.text_area("📋 Copy this:", value=bridge_text, height=400, key=f"{kp}bridge_area")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # SUGGESTED ACTIONS (not a guide!)
+    # ═══════════════════════════════════════════════════════════════════════
+    if findings:
+        st.markdown("---")
+        st.markdown("#### 💡 Suggested next steps (use your own judgement)")
+        st.caption("These are suggestions only — not instructions. You know your station best.")
+        for i, f in enumerate(findings, 1):
+            st.markdown(f"**{i}.** {f}")
+
 
 # ─── MAIN ──────────────────────────────────────────────────────────────────
 mode = st.radio("Mode:",["Single Station","Multi-Station"],horizontal=True,key="mode")
@@ -610,7 +623,7 @@ if mode == "Single Station":
         c1.metric("Lost",total); c2.metric("Cost",fmt_cost(tc)); c3.metric("Cluster",safe_top(df["Cluster"]))
         c4.metric("Aisle",safe_top(df["Aisle"])); c5.metric("DSP",str(safe_top(df["DSP Name"]))[:15])
         sk = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"]; c6.metric("Shift",safe_top(sk) if len(sk)>0 else "N/A")
-        t1,t2,t3,t4,t5,t6,t7,t8 = st.tabs(["📊 Summary","📍 Locations","💡 Shifts","💰 Cost","🔬 Analysis","📅 Day","💾 Export","📋 Bridge"])
+        t1,t2,t3,t4,t5,t6,t7 = st.tabs(["📊 Summary","📍 Locations","💡 Shifts","💰 Cost","🔬 Analysis & Bridge","📅 Day","💾 Export"])
         with t1:
             with st.expander("🥧 OTR vs UTR"): st.pyplot(make_pie_otr_utr(df,total,f"OTR vs UTR ({dr})"))
             with st.expander("📍 Clusters"):
@@ -644,8 +657,6 @@ if mode == "Single Station":
         with t7:
             exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","Marked Lost DT","shipment_value"]
             ec = [c for c in df.columns if c not in exc]; st.download_button("⬇️ CSV",df[ec].to_csv(index=False),"Lost.csv","text/csv")
-        with t8:
-            st.text_area("📋 Bridge (auto-generated):",value=generate_bridge(df,total,dr),height=500,key="bridge")
     else: st.info("👆 Upload both files.")
 else:
     num = st.slider("Stations:",2,5,2,key="ns"); uploaded = {}
@@ -663,7 +674,7 @@ else:
             if "location" in pt.columns and len(pt["location"].dropna())>0: nm = pt["location"].dropna().iloc[0]
             stations[nm] = m; names.append(nm)
         st.success(f"✅ {', '.join(names)}")
-        t1,t2,t3,t4,t5 = st.tabs(["📊 Summary","📍 Locations","💰 Cost","🔬 Analysis","💾 Export"])
+        t1,t2,t3,t4,t5 = st.tabs(["📊 Summary","📍 Locations","💰 Cost","🔬 Analysis & Bridge","💾 Export"])
         with t1:
             for n in names: st.caption(f"{n}: {len(stations[n])} — {fmt_cost(stations[n]['Cost (£)'].sum())}")
         with t2:
