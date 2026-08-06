@@ -46,6 +46,13 @@ def assign_shift(row):
         if "AM" in u or "C1" in u: return "AM"
     return "Unknown"
 
+def classify_otr_utr(sub_bucket):
+    """OTR = Lost On Road (any). UTR = Lost At Station (any). Covers all parcels."""
+    if pd.isna(sub_bucket): return "Unknown"
+    if "Lost On Road" in str(sub_bucket): return "OTR"
+    if "Lost At Station" in str(sub_bucket): return "UTR"
+    return "Unknown"
+
 def clean_scc(df):
     df = df.drop(columns=[c for c in SENSITIVE_COLS if c in df.columns])
     df = df.drop(columns=[c for c in ["Last Scan By","Driver Id"] if c in df.columns])
@@ -75,6 +82,7 @@ def merge_data(pm_df, scc_df):
     merged = pm_cols.merge(scc_clean, on="Tracking ID", how="left")
     merged["Sub Bucket"] = merged["sub_bucket"]
     merged["Bucket"] = merged.get("bucket")
+    merged["Type"] = merged["Sub Bucket"].apply(classify_otr_utr)
     if "Marked Lost DT" in merged.columns:
         merged["Day of Week"] = merged["Marked Lost DT"].dt.day_name()
     elif "Dispatch Time" in merged.columns:
@@ -152,13 +160,12 @@ def make_bar_shift(data, title):
     ax.tick_params(labelsize=7); plt.xticks(rotation=0); plt.tight_layout(); return fig
 
 def make_pie_otr_utr(df, total, title):
-    otr_n = len(df[df["Sub Bucket"].str.contains("Lost On Road", na=False)])
-    utr_n = len(df[df["Sub Bucket"] == "Lost At Station - UTR Reprocess"])
-    other_n = total - otr_n - utr_n
+    """Pie: OTR = all Lost On Road, UTR = all Lost At Station. No 'Other'."""
+    otr_n = len(df[df["Type"] == "OTR"])
+    utr_n = len(df[df["Type"] == "UTR"])
     labels, sizes, colors, explode = [], [], [], []
+    if utr_n > 0: labels.append(f"UTR ({utr_n})"); sizes.append(utr_n); colors.append("darkorange"); explode.append(0)
     if otr_n > 0: labels.append(f"OTR ({otr_n})"); sizes.append(otr_n); colors.append("firebrick"); explode.append(0.05)
-    if utr_n > 0: labels.append(f"UTR ({utr_n})"); sizes.append(utr_n); colors.append("darkorange"); explode.append(0.05)
-    if other_n > 0: labels.append(f"Other ({other_n})"); sizes.append(other_n); colors.append("steelblue"); explode.append(0)
     fig, ax = plt.subplots(figsize=(2, 1.5))
     ax.pie(sizes, labels=labels, colors=colors, explode=explode, autopct="%1.0f%%", startangle=90, textprops={"fontsize":5})
     ax.set_title(title, fontsize=6); plt.tight_layout(); return fig
@@ -166,27 +173,20 @@ def make_pie_otr_utr(df, total, title):
 def render_missing_parcels(df, total, matched):
     missing_count = total - matched
     if missing_count > 0:
-        st.info(f"ℹ️ **{missing_count} parcel(s)** in Perfect Mile had no matching row in SCC — "
-                "included in totals but no cluster/aisle/DSP detail.")
+        st.info(f"ℹ️ **{missing_count} parcel(s)** in PM had no SCC match — included but no location detail.")
         missing_df = df[df["Cluster"].isna()].copy()
         if len(missing_df) > 0:
             with st.expander(f"🔍 View {len(missing_df)} Missing Parcel(s)"):
                 sel_tid = st.selectbox("Select parcel:", missing_df["Tracking ID"].tolist(), key="miss_sel")
                 row = missing_df[missing_df["Tracking ID"] == sel_tid].iloc[0]
-                st.markdown(f"**Tracking ID:** {sel_tid}")
-                st.markdown(f"**Sub Bucket:** {row.get('Sub Bucket', 'N/A')}")
-                st.markdown(f"**Shift:** {row.get('Shift', 'N/A')}")
-                st.markdown(f"**Loss Reason:** {row.get('Loss Reason', 'N/A')}")
-                st.markdown(f"**Cost:** {fmt_cost(row.get('Cost (£)'))}")
-                st.markdown(f"**Day Marked Lost:** {row.get('Day of Week', 'N/A')}")
-                st.caption("This parcel is in Perfect Mile but not in SCC.")
+                st.markdown(f"**TID:** {sel_tid} | **Sub Bucket:** {row.get('Sub Bucket','N/A')} | **Type:** {row.get('Type','N/A')} | **Shift:** {row.get('Shift','N/A')} | **Cost:** {fmt_cost(row.get('Cost (£)'))}")
 
 def render_locations_tab(df, total, dr, kp=""):
-    st.info("💡 **OTR** = DSP + reasons + delivery areas. **UTR** = loss reasons. **All** = cluster/aisle.")
+    st.info("💡 **OTR** = DSP + reasons + delivery areas. **UTR** = sub-buckets + clusters. **All** = cluster/aisle.")
     verify_totals(df, total, "Locations")
-    lf = st.radio("Show:", ["All Parcels","OTR Only (Lost On Road)","UTR Reprocess Only"], horizontal=True, key=f"{kp}lf")
+    lf = st.radio("Show:", ["All Parcels","OTR Only (Lost On Road)","UTR Only (Lost At Station)"], horizontal=True, key=f"{kp}lf")
     if lf == "OTR Only (Lost On Road)":
-        vdf = df[df["Sub Bucket"].str.contains("Lost On Road", na=False)].copy()
+        vdf = df[df["Type"] == "OTR"].copy()
         st.write(f"**{len(vdf)} OTR parcels** — Cost: {fmt_cost(vdf['Cost (£)'].sum())}")
         if len(vdf) == 0: st.warning("No OTR parcels."); return
         with st.expander("🚚 OTR by DSP"):
@@ -199,40 +199,44 @@ def render_locations_tab(df, total, dr, kp=""):
             dsps = sorted(vdf["DSP Name"].dropna().unique())
             if dsps:
                 sd = st.selectbox("DSP:", dsps, key=f"{kp}ods")
-                ddf = vdf[vdf["DSP Name"] == sd]; st.write(f"**{len(ddf)}** by {sd} — Cost: {fmt_cost(ddf['Cost (£)'].sum())}")
+                ddf = vdf[vdf["DSP Name"] == sd]; st.write(f"**{len(ddf)}** by {sd} — {fmt_cost(ddf['Cost (£)'].sum())}")
                 r = ddf["Loss Reason"].dropna().value_counts()
                 if len(r) > 0: st.dataframe(make_table(r, "Reason", "Count"), use_container_width=True)
-        with st.expander("📍 OTR Delivery Areas (where parcels get lost geographically)"):
+        with st.expander("📍 OTR Delivery Areas (where parcels get lost)"):
             area_by = st.radio("Group by:", ["City","Province","Postal"], horizontal=True, key=f"{kp}oa")
             area_data = vdf[area_by].dropna().value_counts()
             if len(area_data) > 0:
                 vm = st.radio("Display:", ["Chart","Table + Cost"], horizontal=True, key=f"{kp}oav")
                 if vm == "Chart": st.pyplot(make_bar_horiz(area_data.head(15), f"OTR by {area_by} ({dr})", color="darkred"))
                 else: st.dataframe(make_cost_table(vdf.dropna(subset=[area_by]), area_by), use_container_width=True)
-            else: st.info(f"No {area_by} data.")
         with st.expander("❓ All OTR Reasons"):
             r = vdf["Loss Reason"].dropna().value_counts()
             if len(r) > 0:
                 vm = st.radio("Display:", ["Chart","Table"], horizontal=True, key=f"{kp}or")
                 if vm == "Chart": st.pyplot(make_bar_horiz(r, f"OTR Reasons ({dr})", color="crimson"))
                 else: st.dataframe(make_table(r, "Reason", "Count"), use_container_width=True)
-    elif lf == "UTR Reprocess Only":
-        vdf = df[df["Sub Bucket"] == "Lost At Station - UTR Reprocess"].copy()
+    elif lf == "UTR Only (Lost At Station)":
+        vdf = df[df["Type"] == "UTR"].copy()
         st.write(f"**{len(vdf)} UTR parcels** — Cost: {fmt_cost(vdf['Cost (£)'].sum())}")
         if len(vdf) == 0: st.warning("No UTR parcels."); return
-        with st.expander("❓ UTR Reasons"):
-            r = vdf["UTR Reason"].dropna().value_counts()
-            if len(r) > 0:
-                vm = st.radio("Display:", ["Chart","Table"], horizontal=True, key=f"{kp}ur")
-                if vm == "Chart": st.pyplot(make_bar_horiz(r, f"UTR Reasons ({dr})", color="darkorange"))
-                else: st.dataframe(make_table(r, "Reason", "Count"), use_container_width=True)
-            else: st.info("No reasons recorded.")
-        with st.expander("📍 UTR by Location"):
+        with st.expander("🏷️ UTR Sub Buckets"):
+            sb = vdf["Sub Bucket"].value_counts()
+            if len(sb) > 0:
+                vm = st.radio("Display:", ["Chart","Table + Cost"], horizontal=True, key=f"{kp}usb")
+                if vm == "Chart": st.pyplot(make_bar_horiz(sb, f"UTR Sub Buckets ({dr})", color="darkorange"))
+                else: st.dataframe(make_cost_table(vdf, "Sub Bucket"), use_container_width=True)
+        with st.expander("📍 UTR by Cluster"):
             cl = vdf["Cluster"].dropna().value_counts()
             if len(cl) > 0:
                 vm = st.radio("Display:", ["Chart","Table + Cost"], horizontal=True, key=f"{kp}ul")
                 if vm == "Chart": st.pyplot(make_bar_horiz(cl, f"UTR Clusters ({dr})", color="darkorange"))
                 else: st.dataframe(make_cost_table(vdf.dropna(subset=["Cluster"]), "Cluster"), use_container_width=True)
+        with st.expander("❓ UTR Loss Reasons"):
+            r = vdf["UTR Reason"].dropna().value_counts()
+            if len(r) > 0:
+                vm = st.radio("Display:", ["Chart","Table"], horizontal=True, key=f"{kp}ur")
+                if vm == "Chart": st.pyplot(make_bar_horiz(r, f"UTR Reasons ({dr})", color="darkorange"))
+                else: st.dataframe(make_table(r, "Reason", "Count"), use_container_width=True)
     else:
         vdf = df.copy(); st.write(f"**{len(vdf)} parcels (all)** — Cost: {fmt_cost(vdf['Cost (£)'].sum())}")
         with st.expander("🏆 Top 10 Locations"):
@@ -247,19 +251,16 @@ def render_locations_tab(df, total, dr, kp=""):
             if clusters:
                 sel = st.selectbox("Cluster:", clusters, key=f"{kp}cl")
                 filt = vdf[vdf["Cluster"] == sel]
-                st.write(f"**{len(filt)}** in Cluster {sel} — Cost: {fmt_cost(filt['Cost (£)'].sum())}")
+                st.write(f"**{len(filt)}** in {sel} — Cost: {fmt_cost(filt['Cost (£)'].sum())}")
                 ad = filt["Aisle"].dropna().value_counts()
                 if len(ad) > 0:
                     vm = st.radio("Display:", ["Chart","Table + Cost"], horizontal=True, key=f"{kp}cv")
-                    if vm == "Chart": st.pyplot(make_bar_horiz(ad, f"Cluster {sel} Aisles", color="steelblue"))
+                    if vm == "Chart": st.pyplot(make_bar_horiz(ad, f"{sel} Aisles", color="steelblue"))
                     else: st.dataframe(make_cost_table(filt.dropna(subset=["Aisle"]), "Aisle"), use_container_width=True)
-                sc = get_detail_cols(filt, extra=["Tracking ID","Aisle","Sort Zone"])
-                det = filt[sc].sort_values("DSP Name").reset_index(drop=True); det.index = range(1, len(det)+1)
-                st.dataframe(det, use_container_width=True)
 
 def render_opportunities_tab(df, total, dr, kp=""):
     st.info("💡 Each parcel assigned to the responsible shift via sub-bucket + last scan time.")
-    with st.expander("📖 How shift actionable opportunities are assigned"):
+    with st.expander("📖 How shift opportunities are assigned"):
         st.markdown("""
 | Sub Bucket | Shift | Reasoning |
 |---|---|---|
@@ -267,7 +268,7 @@ def render_opportunities_tab(df, total, dr, kp=""):
 | Stowed Not Picked Up | **AM** | Stowed but never picked for dispatch |
 | Debrief Receive(RTS) | **PM** | Driver returned at debrief |
 | Lost On Road - * | **OTR** | Lost while with DSP driver |
-| PNOV / UTR / Other | **Time-based** | Last scan hour: 0–9→NS, 10–13→AM, 14–23→PM |
+| PNOV / UTR Reprocess / Other | **Time-based** | Last scan hour: 0–9→NS, 10–13→AM, 14–23→PM |
 """)
     cols = st.columns(4)
     for i, (s, d) in enumerate(SHIFT_DEFINITIONS.items()): cols[i].markdown(f"**{s}:** {d}")
@@ -277,8 +278,7 @@ def render_opportunities_tab(df, total, dr, kp=""):
     with st.expander("🏆 Shift Opportunity Leaderboard"):
         rows = []
         for s in SHIFT_ORDER:
-            s_df = df[df["Shift"] == s]
-            n = len(s_df); cost = s_df["Cost (£)"].sum()
+            s_df = df[df["Shift"] == s]; n = len(s_df); cost = s_df["Cost (£)"].sum()
             rows.append({"Shift": s, "Lost": n, "%": f"{round(n/total*100,1)}%", "Cost Lost": fmt_cost(cost), "Window": SHIFT_DEFINITIONS[s]})
         rows.sort(key=lambda r: r["Lost"], reverse=True)
         lb = pd.DataFrame(rows); lb.index = range(1, len(lb)+1)
@@ -296,11 +296,67 @@ def render_opportunities_tab(df, total, dr, kp=""):
             vm = st.radio("Display:", ["Table","Chart"], horizontal=True, key=f"{kp}sd")
             if vm == "Chart": st.pyplot(make_bar_horiz(sbc, f"{ss} Sub Buckets", color=SHIFT_COLORS.get(ss,"steelblue")))
             else: st.dataframe(sbt, use_container_width=True)
-            sc2 = [c for c in ["Tracking ID","Sub Bucket","Cluster","Aisle","DSP Name","Loss Reason","Cost (£)"] if c in df.columns]
-            det = sdf[sc2].sort_values("Sub Bucket").reset_index(drop=True); det.index = range(1, len(det)+1)
-            st.dataframe(det, use_container_width=True)
+
+def render_cost_tab(df, total, dr, kp=""):
+    """Dedicated cost tab — cost by reason with OTR/UTR classification."""
+    total_cost = df["Cost (£)"].sum()
+    otr_df = df[df["Type"] == "OTR"]; utr_df = df[df["Type"] == "UTR"]
+    st.markdown(f"### 💰 Cost Analysis — {fmt_cost(total_cost)} total")
+    st.markdown(f"**OTR:** {len(otr_df)} parcels — {fmt_cost(otr_df['Cost (£)'].sum())} | "
+                f"**UTR:** {len(utr_df)} parcels — {fmt_cost(utr_df['Cost (£)'].sum())}")
     st.markdown("---")
-    st.caption(f"✅ Verification: {len(df[df['Shift']!='Unknown'])} assigned + {unk} unknown = {total}")
+    with st.expander("💰 Cost by Sub Bucket (with OTR/UTR type)", expanded=True):
+        cost_sb = df.groupby(["Sub Bucket","Type"]).agg(Count=("Tracking ID","count"), Total_Cost=("Cost (£)","sum")).sort_values("Total_Cost", ascending=False).reset_index()
+        cost_sb["Total_Cost"] = cost_sb["Total_Cost"].apply(fmt_cost)
+        cost_sb = cost_sb.rename(columns={"Total_Cost":"Cost Lost"})
+        cost_sb.index = range(1, len(cost_sb)+1)
+        vm = st.radio("Display:", ["Table","Chart"], horizontal=True, key=f"{kp}csb")
+        if vm == "Chart":
+            chart_data = df.groupby("Sub Bucket")["Cost (£)"].sum().sort_values(ascending=False)
+            h = max(2, len(chart_data)*0.3); fig, ax = plt.subplots(figsize=(7, h))
+            labs = trunc(chart_data.index, 30); ax.barh(labs, chart_data.values, color="teal"); ax.invert_yaxis()
+            for i, v in enumerate(chart_data.values): ax.text(v+0.5, i, fmt_cost(v), va="center", fontsize=6)
+            ax.set_xlabel("Cost (£)",fontsize=8); ax.set_title(f"Cost by Sub Bucket ({dr})",fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout(); st.pyplot(fig)
+        else:
+            st.dataframe(cost_sb, use_container_width=True)
+    with st.expander("💰 OTR Cost by Reason"):
+        if len(otr_df) > 0:
+            otr_r = otr_df.groupby("Loss Reason").agg(Count=("Tracking ID","count"), Total_Cost=("Cost (£)","sum")).sort_values("Total_Cost", ascending=False).reset_index()
+            otr_r["Total_Cost"] = otr_r["Total_Cost"].apply(fmt_cost); otr_r = otr_r.rename(columns={"Total_Cost":"Cost Lost"})
+            otr_r.index = range(1, len(otr_r)+1)
+            vm = st.radio("Display:", ["Table","Chart"], horizontal=True, key=f"{kp}cor")
+            if vm == "Chart":
+                rd = otr_df.groupby("Loss Reason")["Cost (£)"].sum().sort_values(ascending=False)
+                h = max(2, len(rd)*0.3); fig, ax = plt.subplots(figsize=(7, h))
+                ax.barh(trunc(rd.index,25), rd.values, color="firebrick"); ax.invert_yaxis()
+                for i, v in enumerate(rd.values): ax.text(v+0.5, i, fmt_cost(v), va="center", fontsize=6)
+                ax.set_xlabel("Cost (£)",fontsize=8); ax.set_title(f"OTR Cost by Reason",fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout(); st.pyplot(fig)
+            else: st.dataframe(otr_r, use_container_width=True)
+        else: st.info("No OTR parcels.")
+    with st.expander("💰 UTR Cost by Reason"):
+        if len(utr_df) > 0:
+            utr_r = utr_df.groupby("UTR Reason").agg(Count=("Tracking ID","count"), Total_Cost=("Cost (£)","sum")).sort_values("Total_Cost", ascending=False).reset_index()
+            utr_r["Total_Cost"] = utr_r["Total_Cost"].apply(fmt_cost); utr_r = utr_r.rename(columns={"Total_Cost":"Cost Lost"})
+            utr_r.index = range(1, len(utr_r)+1)
+            vm = st.radio("Display:", ["Table","Chart"], horizontal=True, key=f"{kp}cur")
+            if vm == "Chart":
+                rd = utr_df.groupby("UTR Reason")["Cost (£)"].sum().sort_values(ascending=False)
+                h = max(2, len(rd)*0.3); fig, ax = plt.subplots(figsize=(7, h))
+                ax.barh(trunc(rd.index,25), rd.values, color="darkorange"); ax.invert_yaxis()
+                for i, v in enumerate(rd.values): ax.text(v+0.5, i, fmt_cost(v), va="center", fontsize=6)
+                ax.set_xlabel("Cost (£)",fontsize=8); ax.set_title(f"UTR Cost by Reason",fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout(); st.pyplot(fig)
+            else: st.dataframe(utr_r, use_container_width=True)
+        else: st.info("No UTR parcels.")
+    with st.expander("💰 Cost by Shift"):
+        shift_cost = df.groupby("Shift").agg(Count=("Tracking ID","count"), Total_Cost=("Cost (£)","sum")).reindex(SHIFT_ORDER+["Unknown"], fill_value=0).reset_index()
+        shift_cost["Total_Cost"] = shift_cost["Total_Cost"].apply(fmt_cost)
+        shift_cost = shift_cost.rename(columns={"Total_Cost":"Cost Lost"}); shift_cost.index = range(1, len(shift_cost)+1)
+        st.dataframe(shift_cost, use_container_width=True)
+    with st.expander("💰 Top 10 Most Expensive Parcels"):
+        top = df.nlargest(10, "Cost (£)")
+        sc = [c for c in ["Tracking ID","Sub Bucket","Type","Shift","Cost (£)","DSP Name","Cluster","Loss Reason"] if c in top.columns]
+        out = top[sc].reset_index(drop=True); out.index = range(1, len(out)+1)
+        st.dataframe(out, use_container_width=True)
 
 mode = st.radio("Mode:", ["Single Station","Multi-Station Compare"], horizontal=True, key="mode")
 with st.expander("📖 How to get your data"):
@@ -321,9 +377,8 @@ if mode == "Single Station":
         if found: st.warning(f"🔒 PII removed: {', '.join(found)}")
         df = merge_data(pm_df, scc_df); total = len(df)
         if total == 0: st.warning("No data."); st.stop()
-        pm_total = len(pm_df); matched = df["Cluster"].notna().sum()
-        total_cost = df["Cost (£)"].sum()
-        st.success(f"✅ **{total} lost parcels** — Total cost: **{fmt_cost(total_cost)}** (PM:{pm_total}, SCC:{len(scc_df)}, Matched:{matched})")
+        pm_total = len(pm_df); matched = df["Cluster"].notna().sum(); total_cost = df["Cost (£)"].sum()
+        st.success(f"✅ **{total} lost parcels** — Cost: **{fmt_cost(total_cost)}** (PM:{pm_total}, SCC:{len(scc_df)}, Matched:{matched})")
         render_missing_parcels(df, total, matched)
         if total != pm_total: st.error(f"🚨 MISMATCH: {total} vs PM {pm_total}")
         dr = get_date_range(df)
@@ -332,24 +387,23 @@ if mode == "Single Station":
         c1.metric("Total Lost", total); c2.metric("Total Cost", fmt_cost(total_cost))
         c3.metric("Worst Cluster", safe_top(df["Cluster"])); c4.metric("Worst Aisle", safe_top(df["Aisle"]))
         c5.metric("Worst DSP", str(safe_top(df["DSP Name"]))[:15])
-        sk = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"]; c6.metric("Worst Shift", safe_top(sk) if len(sk) > 0 else "N/A")
-        t1,t2,t3,t4,t5,t6 = st.tabs(["📊 Summary","📍 Lost Locations","💡 Opportunities","📅 Day of Week","💾 Export","📋 Bridge"])
+        sk = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"]; c6.metric("Worst Shift", safe_top(sk) if len(sk)>0 else "N/A")
+        t1,t2,t3,t4,t5,t6,t7 = st.tabs(["📊 Summary","📍 Lost Locations","💡 Opportunities","💰 Cost","📅 Day of Week","💾 Export","📋 Bridge"])
         with t1:
-            verify_totals(df, total, "Summary")
-            with st.expander("🥧 OTR & UTR"): st.pyplot(make_pie_otr_utr(df, total, f"OTR & UTR vs Other ({dr})"))
-            with st.expander("📏 Parcel Size Breakdown"):
+            with st.expander("🥧 OTR vs UTR"): st.pyplot(make_pie_otr_utr(df, total, f"OTR vs UTR ({dr})"))
+            with st.expander("📏 Parcel Size"):
                 sc2 = df["Size Category"].value_counts()
                 if len(sc2) > 0:
                     vm = st.radio("Display:", ["Chart","Table + Cost"], horizontal=True, key="sz")
-                    if vm == "Chart": st.pyplot(make_bar_vert(sc2,"Size","Lost",f"Parcel Size ({dr})", color=["green","orange","red","darkred","grey"][:len(sc2)]))
+                    if vm == "Chart": st.pyplot(make_bar_vert(sc2,"Size","Lost",f"Size ({dr})", color=["green","orange","red","darkred","grey"][:len(sc2)]))
                     else: st.dataframe(make_cost_table(df, "Size Category"), use_container_width=True)
-            with st.expander("📍 Cluster Breakdown"):
+            with st.expander("📍 Clusters"):
                 cc = df["Cluster"].dropna().value_counts()
                 if len(cc) > 0:
                     vm = st.radio("Display:", ["Chart","Table + Cost"], horizontal=True, key="cv")
                     if vm == "Chart": st.pyplot(make_bar_horiz(cc, f"By Cluster ({dr})"))
                     else: st.dataframe(make_cost_table(df.dropna(subset=["Cluster"]), "Cluster"), use_container_width=True)
-            with st.expander("🏷️ Lost Sub Bucket Breakdown"):
+            with st.expander("🏷️ Sub Buckets"):
                 sb = df["Sub Bucket"].value_counts()
                 if len(sb) > 0:
                     vm = st.radio("Display:", ["Chart","Table + Cost"], horizontal=True, key="sv")
@@ -357,13 +411,9 @@ if mode == "Single Station":
                     else: st.dataframe(make_cost_table(df, "Sub Bucket"), use_container_width=True)
         with t2: render_locations_tab(df, total, dr, kp="s_")
         with t3: render_opportunities_tab(df, total, dr, kp="s_")
-        with t4:
-            verify_totals(df, total, "Day")
-            st.markdown("""**📌 How Day of Week is calculated:**
-
-Each parcel has an `event_datetime` in Perfect Mile — the date the system **marked that parcel as lost**.
-We use that day. This gives a natural spread because parcels are flagged on different days.
-We do NOT use EoD scrub time (bunches on Sun/Mon) or dispatch date (only for dispatched parcels).""")
+        with t4: render_cost_tab(df, total, dr, kp="s_")
+        with t5:
+            st.markdown("**📌 Day of Week** = date parcel was marked lost in Perfect Mile (`event_datetime`). Not EoD scrub time.")
             if "Day of Week" in df.columns:
                 dd = df["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
                 with st.expander("📅 Day of Week"):
@@ -371,19 +421,13 @@ We do NOT use EoD scrub time (bunches on Sun/Mon) or dispatch date (only for dis
                     if vm == "Chart":
                         fig, ax = plt.subplots(figsize=CHART)
                         ax.plot(dd.index, dd.values, marker="o", color="green", linewidth=2, markersize=6)
-                        for i,(d,v) in enumerate(dd.items()):
-                            ax.annotate(str(int(v)), xy=(i,v), xytext=(0,8), textcoords="offset points", ha="center", fontsize=8, fontweight="bold")
-                        ax.set_xlabel("Day",fontsize=8); ax.set_ylabel("Lost",fontsize=8); ax.set_title(f"Lost by Day Marked ({dr})",fontsize=9)
-                        ax.tick_params(labelsize=7); plt.xticks(rotation=0); plt.tight_layout(); st.pyplot(fig)
+                        for i,(d,v) in enumerate(dd.items()): ax.annotate(str(int(v)), xy=(i,v), xytext=(0,8), textcoords="offset points", ha="center", fontsize=8, fontweight="bold")
+                        ax.set_xlabel("Day",fontsize=8); ax.set_ylabel("Lost",fontsize=8); ax.set_title(f"Lost by Day ({dr})",fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout(); st.pyplot(fig)
                     else: st.dataframe(make_table(dd,"Day","Lost"), use_container_width=True)
-                    st.caption(f"ℹ️ {df['Day of Week'].notna().sum()}/{total} parcels have date data.")
-        with t5:
-            verify_totals(df, total, "Export")
-            exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","Marked Lost DT","shipment_value"]
-            ec = [c for c in df.columns if c not in exc]
-            st.download_button("⬇️ Download CSV", df[ec].to_csv(index=False), "Lost_Merged.csv", "text/csv")
         with t6:
-            verify_totals(df, total, "Bridge")
+            exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","Marked Lost DT","shipment_value"]
+            ec = [c for c in df.columns if c not in exc]; st.download_button("⬇️ Download CSV", df[ec].to_csv(index=False), "Lost_Merged.csv", "text/csv")
+        with t7:
             cl_c = df["Cluster"].dropna().value_counts(); sb_c = df["Sub Bucket"].value_counts()
             sh_c = df[df["Shift"]!="Unknown"]["Shift"].value_counts()
             sl = "\n".join([f"  {s}: {int(sh_c.get(s,0))} ({round(int(sh_c.get(s,0))/total*100,1)}%) — {fmt_cost(df[df['Shift']==s]['Cost (£)'].sum())}" for s in SHIFT_ORDER])
@@ -393,7 +437,7 @@ We do NOT use EoD scrub time (bunches on Sun/Mon) or dispatch date (only for dis
                 c_cost = df[df["Cluster"]==cn]["Cost (£)"].sum()
                 ta = df[df["Cluster"]==cn]["Aisle"].dropna().value_counts().head(3)
                 cdet += f"  {cn}: {cv} ({round(int(cv)/total*100,1)}%) — {fmt_cost(c_cost)} — {', '.join([f'{a}({n})' for a,n in ta.items()])}\n"
-            bridge = f"Lost Parcels Bridge — DRM2\n{dr}\nTOTAL: {total} — {fmt_cost(total_cost)}\nSHIFTS:\n{sl}\nSUB BUCKETS:\n{sbl}\nLOCATIONS:\n{cdet}"
+            bridge = f"Lost Parcels Bridge — DRM2\n{dr}\nTOTAL: {total} — {fmt_cost(total_cost)}\nOTR: {len(df[df['Type']=='OTR'])} — {fmt_cost(df[df['Type']=='OTR']['Cost (£)'].sum())}\nUTR: {len(df[df['Type']=='UTR'])} — {fmt_cost(df[df['Type']=='UTR']['Cost (£)'].sum())}\nSHIFTS:\n{sl}\nSUB BUCKETS:\n{sbl}\nLOCATIONS:\n{cdet}"
             st.text_area("✏️ Bridge:", value=bridge, height=300, key="bridge")
     elif pm_file: st.info("👆 Upload SCC.")
     elif scc_file: st.info("👆 Upload PM.")
@@ -418,38 +462,33 @@ else:
             else: nm = f"Station {i+1}"
             stations[nm] = m; names.append(nm)
         st.success(f"✅ {', '.join(names)}")
-        t1,t2,t3,t4,t5 = st.tabs(["📊 Summary","📍 Locations","💡 Opportunities","📅 Day","💾 Export"])
+        t1,t2,t3,t4,t5,t6 = st.tabs(["📊 Summary","📍 Locations","💡 Opportunities","💰 Cost","📅 Day","💾 Export"])
         with t1:
-            with st.expander("📊 Total Lost + Cost"):
+            with st.expander("📊 Total Lost"):
                 fig, ax = plt.subplots(figsize=CHART)
                 bars = ax.bar(names, [len(stations[n]) for n in names], color=STATION_COLORS[:len(names)])
                 for b in bars: ax.text(b.get_x()+b.get_width()/2, b.get_height()+0.3, str(int(b.get_height())), ha="center", fontsize=8)
-                ax.set_ylabel("Lost",fontsize=8); ax.set_title("Total by Station",fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout(); st.pyplot(fig)
-                for n in names:
-                    st.caption(f"{n}: {len(stations[n])} parcels — {fmt_cost(stations[n]['Cost (£)'].sum())}")
-            with st.expander("🥧 OTR & UTR"):
-                sp = st.selectbox("Station:", names, key="mcp")
-                st.pyplot(make_pie_otr_utr(stations[sp], len(stations[sp]), f"{sp} OTR & UTR"))
+                ax.set_ylabel("Lost",fontsize=8); ax.set_title("By Station",fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout(); st.pyplot(fig)
+                for n in names: st.caption(f"{n}: {len(stations[n])} — {fmt_cost(stations[n]['Cost (£)'].sum())}")
+            with st.expander("🥧 OTR vs UTR"):
+                sp = st.selectbox("Station:", names, key="mcp"); st.pyplot(make_pie_otr_utr(stations[sp], len(stations[sp]), sp))
         with t2:
-            sel = st.selectbox("Station:", names, key="mcl")
-            render_locations_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mc_{sel}_")
+            sel = st.selectbox("Station:", names, key="mcl"); render_locations_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mc_{sel}_")
         with t3:
-            sel = st.selectbox("Station:", names, key="mco")
-            render_opportunities_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mc_{sel}_")
+            sel = st.selectbox("Station:", names, key="mco"); render_opportunities_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mc_{sel}_")
         with t4:
-            with st.expander("📅 Day of Week"):
-                st.caption("Day = date parcel was marked as lost in Perfect Mile.")
+            sel = st.selectbox("Station:", names, key="mcc"); render_cost_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mc_{sel}_")
+        with t5:
+            with st.expander("📅 Day"):
                 fig, ax = plt.subplots(figsize=CHART)
                 for i,n in enumerate(names):
                     if "Day of Week" in stations[n].columns:
                         dd = stations[n]["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
                         ax.plot(dd.index, dd.values, marker="o", label=n, color=STATION_COLORS[i], linewidth=2)
-                ax.set_ylabel("Lost",fontsize=8); ax.set_title("By Day Marked",fontsize=9)
-                ax.tick_params(labelsize=7); ax.legend(fontsize=7); plt.xticks(rotation=0); plt.tight_layout(); st.pyplot(fig)
-        with t5:
+                ax.set_ylabel("Lost",fontsize=8); ax.tick_params(labelsize=7); ax.legend(fontsize=7); plt.tight_layout(); st.pyplot(fig)
+        with t6:
             for n in names:
                 exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","Marked Lost DT","shipment_value"]
-                ec = [c for c in stations[n].columns if c not in exc]
-                st.download_button(f"⬇️ {n}", stations[n][ec].to_csv(index=False), f"Lost_{n}.csv", "text/csv", key=f"dl{n}")
+                ec = [c for c in stations[n].columns if c not in exc]; st.download_button(f"⬇️ {n}", stations[n][ec].to_csv(index=False), f"Lost_{n}.csv", "text/csv", key=f"dl{n}")
     elif len(uploaded) == 1: st.warning("Need ≥2 stations.")
     else: st.info("👆 Upload file pairs.")
