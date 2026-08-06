@@ -16,13 +16,15 @@ SHIFT_DEFINITIONS = {"NS": "00:00 – 09:59 (Night Sort — stow)", "AM": "10:00
 SHIFT_HOUR_MAP = {0:"NS",1:"NS",2:"NS",3:"NS",4:"NS",5:"NS",6:"NS",7:"NS",8:"NS",9:"NS",10:"AM",11:"AM",12:"AM",13:"AM",14:"PM",15:"PM",16:"PM",17:"PM",18:"PM",19:"PM",20:"PM",21:"PM",22:"PM",23:"PM"}
 # Fixed shift assignment: sub-bucket directly tells us which shift was responsible
 SUB_BUCKET_SHIFT_MAP = {"Lost At Station - Inducted Not Stowed":"NS","Lost At Station - Stowed Not Picked Up":"AM","Lost At Station - Debrief Receive(RTS)":"PM","Lost On Road - Attempted":"OTR","Lost On Road - Damage":"OTR","Lost On Road - No Further Status":"OTR"}
-# PII columns to remove from SCC (Driver Id kept for OTR analysis, Last Scan By kept for UTR analysis)
+# PII columns to remove from SCC (Driver Id kept for OTR, Last Scan By kept for UTR)
 SENSITIVE_COLS = ["Holder Name","City","Postal","Province","Ordering Order ID","Order Amount","Receivable Amount","Payment Method","District","Scheduled Delivery End Time"]
 REQUIRED_SCC_COLS = ["Tracking ID","Sort Zone","Aisle","Cluster","Package Length","Package Width","Package Height","DSP Name","Assigned Cycle","Last Updated Time"]
 REQUIRED_PM_COLS = ["tracking_id","sub_bucket"]
 CHART = (7, 2.5)  # Default chart size (width, height)
 DSP_MAX = 20  # Max chars for DSP name labels
 LABEL_MAX = 25  # Max chars for general labels
+EOD_SCRUB_HOUR_START = 22  # EoD scrub window start hour (inclusive)
+EOD_SCRUB_HOUR_END = 23  # EoD scrub window end hour (inclusive) — scans in 22:00-23:59 are scrub operators
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 def get_size(val):
@@ -61,6 +63,22 @@ def assign_shift(row):
     # Step 5: Could not determine
     return "Unknown"
 
+def is_eod_scrub(row):
+    """Detect if the Last Scan By is likely an EoD scrub operator.
+    EoD scrub scans happen in a late-night window (22:00-23:59).
+    The person running the scrub is NOT the person who lost the parcel —
+    they just flagged it during the end-of-day audit.
+    General solution: any scan in the scrub window is excluded from associate analysis."""
+    lut = row.get("Last Updated Time")
+    if pd.notna(lut):
+        try:
+            hour = lut.hour
+            if EOD_SCRUB_HOUR_START <= hour <= EOD_SCRUB_HOUR_END:
+                return True
+        except (AttributeError, TypeError):
+            pass
+    return False
+
 def clean_scc(df):
     """Clean SCC data: remove PII, extract associate + driver, parse dimensions."""
     # Remove sensitive PII columns
@@ -69,10 +87,10 @@ def clean_scc(df):
     if "Last Scan By" in df.columns:
         df["Associate"] = df["Last Scan By"].astype(str).str.split("@").str[0].replace("nan", pd.NA)
         df = df.drop(columns=["Last Scan By"])  # Drop full email, keep alias only
-    # Keep Driver Id for OTR analysis (it's already just an ID, not full name)
+    # Keep Driver Id for OTR analysis
     if "Driver Id" in df.columns:
         df["Driver"] = df["Driver Id"].astype(str).replace("nan", pd.NA)
-        df = df.drop(columns=["Driver Id"])  # Rename to generic "Driver"
+        df = df.drop(columns=["Driver Id"])
     # Parse package dimensions (strip "cm" text, convert to numeric)
     for col in ["Package Length","Package Width","Package Height"]:
         if col in df.columns:
@@ -123,6 +141,8 @@ def merge_data(pm_df, scc_df):
         merged["UTR Reason"] = "Unknown"
     # Assign shift responsibility
     merged["Shift"] = merged.apply(assign_shift, axis=1)
+    # Flag EoD scrub scans (associate is scrub operator, not the person who lost it)
+    merged["Is EoD Scrub"] = merged.apply(is_eod_scrub, axis=1)
     # Ensure all expected columns exist
     for col in ["Cluster","Aisle","Sort Zone","DSP Name","Size Category","Associate","Driver"]:
         if col not in merged.columns: merged[col] = None
@@ -204,13 +224,11 @@ def render_missing_parcels(df, total, matched):
     if missing_count > 0:
         st.info(f"ℹ️ **{missing_count} parcel(s)** in Perfect Mile had no matching row in SCC — "
                 "they are included in totals but have no cluster/aisle/DSP detail because SCC didn't have them.")
-        # Get the missing parcels (where Cluster is NaN = no SCC match)
         missing_df = df[df["Cluster"].isna()].copy()
         if len(missing_df) > 0:
             with st.expander(f"🔍 View {len(missing_df)} Missing Parcel(s)"):
                 sel_tid = st.selectbox("Select parcel:", missing_df["Tracking ID"].tolist(), key="miss_sel")
                 row = missing_df[missing_df["Tracking ID"] == sel_tid].iloc[0]
-                # Show whatever PM data we have
                 st.markdown(f"**Tracking ID:** {sel_tid}")
                 st.markdown(f"**Sub Bucket:** {row.get('Sub Bucket', 'N/A')}")
                 st.markdown(f"**Shift:** {row.get('Shift', 'N/A')}")
@@ -222,20 +240,21 @@ def render_missing_parcels(df, total, matched):
 # ─── PEOPLE TAB (OTR → Drivers, UTR → Associates) ────────────────────────────
 def render_people_tab(df, total, dr, kp=""):
     """Shows who was last responsible before loss:
-    - OTR parcels → Driver Id (the DSP driver who had it on road)
-    - UTR parcels → Associate login (last person to scan in station)
+    - OTR parcels → Driver Id + DSP (the driver who had it on road)
+    - UTR parcels → Associate login (last person to scan in station, excluding EoD scrub)
     This builds trends over time to identify repeat patterns."""
     st.markdown("### 👤 People — OTR Drivers & UTR Associates")
     st.info("💡 **Purpose:** Build trends over time to spot repeat patterns.\n\n"
             "- **OTR (Lost On Road):** The **Driver Id** from SCC tells us which driver had the parcel when it went missing. "
-            "Tracking this over time helps identify drivers who may need coaching or route adjustments.\n\n"
+            "We also show which DSP they belong to. Tracking this over time helps identify drivers who may need coaching.\n\n"
             "- **UTR (Lost At Station):** The **Last Scan By** from SCC tells us which associate last scanned the parcel "
-            "before it was marked lost. This helps identify training gaps — e.g. an associate who scans but doesn't stow correctly.\n\n"
+            "before it was marked lost. **EoD scrub operators are excluded** — if the last scan was during the EoD scrub window "
+            f"({EOD_SCRUB_HOUR_START}:00–{EOD_SCRUB_HOUR_END}:59), that person was just running the audit, not the one who lost it.\n\n"
             "⚠️ This is about **identifying trends for improvement**, not blame. One appearance means nothing — "
             "repeated appearances across multiple weeks suggest a coaching opportunity.")
     st.markdown("---")
 
-    # ─── OTR SECTION: DRIVERS ─────────────────────────────────────────────────
+    # ─── OTR SECTION: DRIVERS + DSP ──────────────────────────────────────────
     st.markdown("#### 🚚 OTR — Driver Trend")
     otr_df = df[df["Sub Bucket"].str.contains("Lost On Road", na=False)].copy()
     if len(otr_df) == 0:
@@ -243,28 +262,37 @@ def render_people_tab(df, total, dr, kp=""):
     else:
         st.write(f"**{len(otr_df)} OTR parcels**")
         if "Driver" in otr_df.columns and otr_df["Driver"].dropna().nunique() > 0:
+            # Build a Driver → DSP mapping so we can show DSP alongside driver
+            driver_dsp = otr_df[["Driver","DSP Name"]].dropna().drop_duplicates().set_index("Driver")["DSP Name"].to_dict()
             with st.expander("🚚 Drivers with Most OTR Losses"):
                 drv_data = otr_df["Driver"].dropna().value_counts()
                 vm = st.radio("Display:", ["Chart","Table"], horizontal=True, key=f"{kp}drv_v")
                 if vm == "Chart":
-                    st.pyplot(make_bar_horiz(drv_data.head(15), f"OTR by Driver ({dr})", color="firebrick"))
+                    # Show Driver (DSP) on chart labels
+                    chart_labels = pd.Series(drv_data.values, index=[f"{d} ({driver_dsp.get(d,'?')})" for d in drv_data.index])
+                    st.pyplot(make_bar_horiz(chart_labels.head(15), f"OTR by Driver ({dr})", color="firebrick", max_label=35))
                 else:
-                    st.dataframe(make_table(drv_data, "Driver Id", "OTR Parcels Lost"), use_container_width=True)
+                    # Table with Driver Id, DSP, Count
+                    tbl = drv_data.reset_index(); tbl.columns = ["Driver Id", "OTR Parcels Lost"]
+                    tbl["DSP"] = tbl["Driver Id"].map(driver_dsp).fillna("Unknown")
+                    tbl = tbl[["Driver Id","DSP","OTR Parcels Lost"]]
+                    tbl.index = range(1, len(tbl)+1)
+                    st.dataframe(tbl, use_container_width=True)
             with st.expander("🚚 Driver Drill-Down"):
                 drivers = sorted(otr_df["Driver"].dropna().unique())
                 if drivers:
-                    sel = st.selectbox("Select Driver:", drivers, key=f"{kp}drv_sel")
+                    # Show driver with DSP in selectbox
+                    driver_labels = [f"{d} ({driver_dsp.get(d,'?')})" for d in drivers]
+                    sel_idx = st.selectbox("Select Driver:", range(len(drivers)), format_func=lambda i: driver_labels[i], key=f"{kp}drv_sel")
+                    sel = drivers[sel_idx]
                     d_df = otr_df[otr_df["Driver"] == sel]
                     st.write(f"**{len(d_df)} OTR parcels** by Driver {sel}")
+                    st.markdown(f"**DSP:** {driver_dsp.get(sel, 'Unknown')}")
                     # Show reasons breakdown
                     reasons = d_df["Loss Reason"].dropna().value_counts()
                     if len(reasons) > 0:
                         st.markdown("**Loss Reasons:**")
                         st.dataframe(make_table(reasons, "Reason", "Count"), use_container_width=True)
-                    # Show DSP this driver belongs to
-                    dsp = d_df["DSP Name"].dropna()
-                    if len(dsp) > 0:
-                        st.markdown(f"**DSP:** {dsp.iloc[0]}")
                     # Detail table
                     show_cols = [c for c in ["Tracking ID","Sub Bucket","Loss Reason","DSP Name","Day of Week"] if c in d_df.columns]
                     out = d_df[show_cols].reset_index(drop=True); out.index = range(1, len(out)+1)
@@ -274,27 +302,52 @@ def render_people_tab(df, total, dr, kp=""):
 
     st.markdown("---")
 
-    # ─── UTR SECTION: ASSOCIATES ──────────────────────────────────────────────
+    # ─── UTR SECTION: ASSOCIATES (excluding EoD scrub) ────────────────────────
     st.markdown("#### 🏭 UTR — Associate Trend")
+    st.caption(f"ℹ️ Scans in the EoD scrub window ({EOD_SCRUB_HOUR_START}:00–{EOD_SCRUB_HOUR_END}:59) are excluded — "
+               "those associates were running the audit, not handling the parcel operationally.")
     utr_df = df[df["Sub Bucket"] == "Lost At Station - UTR Reprocess"].copy()
     if len(utr_df) == 0:
         st.success("No UTR parcels — no associate issues this period.")
     else:
-        st.write(f"**{len(utr_df)} UTR parcels**")
-        if "Associate" in utr_df.columns and utr_df["Associate"].dropna().nunique() > 0:
+        # Exclude EoD scrub operators — their scan is the audit, not the loss
+        utr_operational = utr_df[~utr_df["Is EoD Scrub"]].copy()
+        scrub_excluded = len(utr_df) - len(utr_operational)
+        st.write(f"**{len(utr_df)} UTR parcels** ({scrub_excluded} excluded as EoD scrub scans)")
+        if "Associate" in utr_operational.columns and utr_operational["Associate"].dropna().nunique() > 0:
             with st.expander("👤 Associates with Most UTR Losses"):
-                assoc_data = utr_df["Associate"].dropna().value_counts()
+                assoc_data = utr_operational["Associate"].dropna().value_counts()
                 vm = st.radio("Display:", ["Chart","Table"], horizontal=True, key=f"{kp}assoc_v")
                 if vm == "Chart":
                     st.pyplot(make_bar_horiz(assoc_data.head(15), f"UTR by Associate ({dr})", color="purple"))
                 else:
-                    st.dataframe(make_table(assoc_data, "Associate", "UTR Parcels Lost"), use_container_width=True)
+                    # Table with associate, count, and last TID they scanned
+                    tbl_rows = []
+                    for assoc, count in assoc_data.items():
+                        # Get the most recent UTR parcel this associate scanned
+                        a_parcels = utr_operational[utr_operational["Associate"] == assoc]
+                        # Sort by Last Updated Time to get most recent, fallback to first row
+                        if "Last Updated Time" in a_parcels.columns:
+                            sorted_p = a_parcels.sort_values("Last Updated Time", ascending=False, na_position="last")
+                        else:
+                            sorted_p = a_parcels
+                        last_tid = sorted_p["Tracking ID"].iloc[0] if len(sorted_p) > 0 else "N/A"
+                        tbl_rows.append({"Associate": assoc, "UTR Parcels": int(count), "Last UTR Scan TID": last_tid})
+                    tbl = pd.DataFrame(tbl_rows); tbl.index = range(1, len(tbl)+1)
+                    st.dataframe(tbl, use_container_width=True)
             with st.expander("👤 Associate Drill-Down"):
-                assocs = sorted(utr_df["Associate"].dropna().unique())
+                assocs = sorted(utr_operational["Associate"].dropna().unique())
                 if assocs:
                     sel = st.selectbox("Select Associate:", assocs, key=f"{kp}assoc_sel")
-                    a_df = utr_df[utr_df["Associate"] == sel]
+                    a_df = utr_operational[utr_operational["Associate"] == sel]
                     st.write(f"**{len(a_df)} UTR parcels** last scanned by {sel}")
+                    # Show most recent TID
+                    if "Last Updated Time" in a_df.columns:
+                        sorted_a = a_df.sort_values("Last Updated Time", ascending=False, na_position="last")
+                    else:
+                        sorted_a = a_df
+                    last_tid = sorted_a["Tracking ID"].iloc[0] if len(sorted_a) > 0 else "N/A"
+                    st.markdown(f"**Most recent UTR scan:** `{last_tid}`")
                     # Show UTR reasons
                     reasons = a_df["UTR Reason"].dropna().value_counts()
                     if len(reasons) > 0:
@@ -310,7 +363,7 @@ def render_people_tab(df, total, dr, kp=""):
                     out = a_df[show_cols].reset_index(drop=True); out.index = range(1, len(out)+1)
                     st.dataframe(out, use_container_width=True)
         else:
-            st.warning("No Associate data available in SCC for UTR parcels.")
+            st.warning("No Associate data available in SCC for UTR parcels (after excluding EoD scrub).")
 
 # ─── LOCATIONS TAB ────────────────────────────────────────────────────────────
 def render_locations_tab(df, total, dr, kp=""):
@@ -512,8 +565,7 @@ We do NOT use the EoD scrub time (which would bunch everything on Sun/Mon) or th
                     st.caption(f"ℹ️ {df['Day of Week'].notna().sum()}/{total} parcels have date data.")
         with t6:
             verify_totals(df, total, "Export")
-            # Exclude internal/raw columns from export
-            exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","Marked Lost DT"]
+            exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","Marked Lost DT","Is EoD Scrub"]
             ec = [c for c in df.columns if c not in exc]
             st.download_button("⬇️ Download CSV", df[ec].to_csv(index=False), "Lost_Merged.csv", "text/csv")
         with t7:
@@ -547,7 +599,6 @@ else:
         stations, names = {}, []
         for i,(pf,sf) in uploaded.items():
             pt, s2 = pd.read_csv(pf), pd.read_csv(sf); m = merge_data(pt, s2)
-            # Try to get station name from data
             if "Station" in s2.columns and len(s2["Station"].dropna()) > 0: nm = s2["Station"].dropna().iloc[0]
             elif "location" in pt.columns and len(pt["location"].dropna()) > 0: nm = pt["location"].dropna().iloc[0]
             else: nm = f"Station {i+1}"
@@ -584,7 +635,7 @@ else:
                 ax.tick_params(labelsize=7); ax.legend(fontsize=7); plt.xticks(rotation=0); plt.tight_layout(); st.pyplot(fig)
         with t6:
             for n in names:
-                exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","Marked Lost DT"]
+                exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","Marked Lost DT","Is EoD Scrub"]
                 ec = [c for c in stations[n].columns if c not in exc]
                 st.download_button(f"⬇️ {n}", stations[n][ec].to_csv(index=False), f"Lost_{n}.csv", "text/csv", key=f"dl{n}")
     elif len(uploaded) == 1: st.warning("Need ≥2 stations.")
