@@ -952,26 +952,44 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
 
 
 def render_multi_station_trend(stations, names, kp=""):
-    """Multi-station trend comparison — each station gets its own line on the chart."""
+    """Multi-station trend comparison — matches single-station quality."""
     st.markdown("### 📈 Multi-Station Trend Comparison")
-    st.caption("Enter weekly totals for each station. Each station gets a separate trend line so you can compare them directly.")
-    st.warning("⚠️ Trends need 3-4+ weeks to be meaningful.")
+    st.caption("Compare weekly trends across stations. Use CSV uploads for full sub-bucket analysis.")
+    st.warning("⚠️ Trends need 3-4+ weeks to be meaningful. Upload PM CSVs for in-depth breakdown.")
 
     num_weeks = st.slider("How many weeks?", 1, 12, 4, key=f"{kp}ms_nw")
-    
+
     # Collect data per station per week
     all_station_data = {}
+    all_station_dfs = {}  # Store raw dataframes for deep analysis
     for station_name in names:
         all_station_data[station_name] = []
+        all_station_dfs[station_name] = []
+
+    # Get sub-bucket names from the uploaded station data for typed breakdown
+    sb_names_all = set()
+    for station_name in names:
+        if "Sub Bucket" in stations[station_name].columns:
+            sb_names_all.update(stations[station_name]["Sub Bucket"].dropna().unique().tolist())
+    sb_names_sorted = sorted(sb_names_all) if sb_names_all else [
+        "Lost At Station - Inducted Not Stowed", "Lost At Station - Stowed Not Picked Up",
+        "Lost At Station - Debrief Receive(RTS)", "Lost On Road - No Further Status",
+        "Lost On Road - Attempted", "Lost On Road - Damage"]
 
     # Input method
-    input_method = st.selectbox("Input method:", ["📝 Type values", "📂 Upload CSVs", "🔀 Mix"], key=f"{kp}ms_method")
+    input_method = st.selectbox("Input method:", [
+        "📝 Type values (with sub-bucket breakdown)",
+        "📂 Upload PM CSVs (full analysis)",
+        "🔀 Mix (CSV + typed)"
+    ], key=f"{kp}ms_method")
 
     for i in range(num_weeks):
         with st.expander(f"Week {i+1}", expanded=(i < 2)):
             wk_label = st.text_input(f"Week label:", value=f"W{i+1}", key=f"{kp}ms_wl{i}")
-            
-            if input_method == "📝 Type values":
+
+            if "Type values" in input_method:
+                # Same quality as single-station typed mode
+                include_sb = st.checkbox("Include sub-bucket breakdown", key=f"{kp}ms_inc_sb_{i}")
                 cols = st.columns(len(names))
                 for j, station_name in enumerate(names):
                     with cols[j]:
@@ -980,23 +998,22 @@ def render_multi_station_trend(stations, names, kp=""):
                         if val > 0:
                             row = {"Week": wk_label, "Total": val}
                             all_station_data[station_name].append(row)
-                # Optional lost breakdown (shared across all stations for this week)
-                if any(st.session_state.get(f"{kp}ms_v{i}_{j}", 0) > 0 for j in range(len(names))):
-                    show_breakdown = st.checkbox("Add lost breakdown", key=f"{kp}ms_bd_{i}")
-                    if show_breakdown:
-                        LOST_BUCKETS = ["Lost At Station", "Lost On Road", "Lost Between Stations", "Other Lost"]
-                        st.caption("Enter breakdown per station:")
-                        for j, station_name in enumerate(names):
-                            st.markdown(f"*{station_name}:*")
-                            bd_cols = st.columns(4)
-                            for k, bucket in enumerate(LOST_BUCKETS):
-                                with bd_cols[k]:
-                                    bd_val = st.number_input(bucket, min_value=0, value=0, step=1, key=f"{kp}ms_bd_{i}_{j}_{k}")
-                                    if bd_val > 0 and len(all_station_data[station_name]) > 0:
-                                        all_station_data[station_name][-1][bucket] = bd_val
+                if include_sb:
+                    st.markdown("---")
+                    st.caption("Sub-bucket breakdown per station (optional — leave 0 if unknown):")
+                    for j, station_name in enumerate(names):
+                        st.markdown(f"**{station_name}:**")
+                        for sb_row_start in range(0, len(sb_names_sorted), 3):
+                            sb_row_names = sb_names_sorted[sb_row_start:sb_row_start+3]
+                            sb_cols = st.columns(len(sb_row_names))
+                            for k, sbn in enumerate(sb_row_names):
+                                with sb_cols[k]:
+                                    sb_val = st.number_input(sbn, min_value=0, value=0, step=1, key=f"{kp}ms_sb_{i}_{j}_{sb_row_start+k}")
+                                    if sb_val > 0 and len(all_station_data[station_name]) > 0:
+                                        all_station_data[station_name][-1][sbn] = sb_val
 
-            elif input_method == "📂 Upload CSVs":
-                st.caption("Upload **PerfectMile** CSVs only (L&U → Lost → Export). One per station per week.")
+            elif "Upload" in input_method:
+                st.caption("Upload **PerfectMile** CSVs (L&U → Lost → Export). One per station per week.")
                 cols = st.columns(len(names))
                 for j, station_name in enumerate(names):
                     with cols[j]:
@@ -1014,6 +1031,7 @@ def render_multi_station_trend(stations, names, kp=""):
                                 else:
                                     st.caption(f"→ {len(wdf)} parcels")
                                 all_station_data[station_name].append(row)
+                                all_station_dfs[station_name].append(wdf)
                             except Exception as e:
                                 st.error(f"Error: {e}")
 
@@ -1026,9 +1044,10 @@ def render_multi_station_trend(stations, names, kp=""):
                         if inp == "Type":
                             val = st.number_input(f"Total:", min_value=0, value=0, step=1, key=f"{kp}ms_mv{i}_{j}")
                             if val > 0:
-                                all_station_data[station_name].append({"Week": wk_label, "Total": val})
+                                row = {"Week": wk_label, "Total": val}
+                                all_station_data[station_name].append(row)
                         else:
-                            f_up = st.file_uploader("CSV:", type="csv", key=f"{kp}ms_mf{i}_{j}")
+                            f_up = st.file_uploader("PM CSV:", type="csv", key=f"{kp}ms_mf{i}_{j}")
                             if f_up:
                                 try:
                                     wdf = pd.read_csv(f_up)
@@ -1041,16 +1060,40 @@ def render_multi_station_trend(stations, names, kp=""):
                                     else:
                                         st.caption(f"→ {len(wdf)}")
                                     all_station_data[station_name].append(row)
+                                    all_station_dfs[station_name].append(wdf)
                                 except Exception as e:
                                     st.error(f"Error: {e}")
+                # Sub-bucket breakdown for typed values in mix mode
+                typed_stations = [names[j] for j in range(len(names))
+                                  if st.session_state.get(f"{kp}ms_r{i}_{j}", "Type") == "Type"
+                                  and st.session_state.get(f"{kp}ms_mv{i}_{j}", 0) > 0]
+                if typed_stations:
+                    sb_exp = st.checkbox("Add sub-bucket breakdown for typed values", key=f"{kp}ms_mx_sb_{i}")
+                    if sb_exp:
+                        st.caption("Sub-bucket breakdown:")
+                        for j, station_name in enumerate(names):
+                            if station_name in typed_stations:
+                                st.markdown(f"**{station_name}:**")
+                                for sb_row_start in range(0, len(sb_names_sorted), 3):
+                                    sb_row_names = sb_names_sorted[sb_row_start:sb_row_start+3]
+                                    sb_c = st.columns(len(sb_row_names))
+                                    for k, sbn in enumerate(sb_row_names):
+                                        with sb_c[k]:
+                                            sb_val = st.number_input(sbn, min_value=0, value=0, step=1, key=f"{kp}ms_mx_sbv_{i}_{j}_{sb_row_start+k}")
+                                            if sb_val > 0 and len(all_station_data[station_name]) > 0:
+                                                all_station_data[station_name][-1][sbn] = sb_val
 
-    # Plot comparison chart
+    # ═══════════════════════════════════════════════════════════════════
+    # RENDER RESULTS
+    # ═══════════════════════════════════════════════════════════════════
     has_data = {n: d for n, d in all_station_data.items() if len(d) >= 2}
+    station_colors = ["steelblue", "firebrick", "darkgreen", "purple", "darkorange"]
+
     if len(has_data) >= 1:
         st.markdown("---")
-        st.markdown("#### 📊 Trend Comparison")
-        station_colors = ["steelblue", "firebrick", "darkgreen", "purple", "darkorange"]
+        st.markdown("#### 📊 Total Trend Comparison")
         fig, ax = plt.subplots(figsize=(8, 3.5))
+        max_val = 0
         for idx, (station_name, data) in enumerate(has_data.items()):
             sdf = pd.DataFrame(data)
             color = station_colors[idx % len(station_colors)]
@@ -1058,9 +1101,12 @@ def render_multi_station_trend(stations, names, kp=""):
             for _, row in sdf.iterrows():
                 ax.annotate(str(int(row["Total"])), xy=(row["Week"], row["Total"]),
                            xytext=(0, 8), textcoords="offset points", ha="center", fontsize=7, color=color)
+            if sdf["Total"].max() > max_val:
+                max_val = sdf["Total"].max()
         ax.set_xlabel("Week", fontsize=8); ax.set_ylabel("Losses", fontsize=8)
         ax.set_title("Lost Parcels — Station Comparison", fontsize=9)
         ax.legend(fontsize=8); ax.tick_params(labelsize=7)
+        if max_val > 0: ax.set_ylim(top=max_val * 1.2)
         plt.xticks(rotation=45); plt.tight_layout()
         st.pyplot(fig)
 
@@ -1077,46 +1123,98 @@ def render_multi_station_trend(stations, names, kp=""):
         comp_df = pd.DataFrame(comparison, index=all_weeks).fillna(0).astype(int)
         comp_df.index.name = "Week"
         st.dataframe(comp_df, width="stretch")
-        # Sub-bucket comparison (if data available from CSV uploads)
+
+        # ─── SUB-BUCKET COMPARISON ────────────────────────────────────
         has_sb_data = False
+        all_sbs = set()
         for station_name, data in has_data.items():
             for d in data:
-                if any(k not in ["Week", "Total"] for k in d.keys()):
-                    has_sb_data = True
-                    break
+                for k in d.keys():
+                    if k not in ["Week", "Total"]:
+                        all_sbs.add(k)
+                        has_sb_data = True
         if has_sb_data:
             st.markdown("---")
             st.markdown("#### 📊 Sub-Bucket Trend by Station")
-            st.caption("Shows sub-bucket breakdown per station over time. Select which sub-buckets to compare.")
-            # Collect all available sub-buckets across all stations
-            all_sbs = set()
-            for station_name, data in has_data.items():
-                for d in data:
-                    for k in d.keys():
-                        if k not in ["Week", "Total"]:
-                            all_sbs.add(k)
+            st.caption("Compare specific sub-buckets across stations over time.")
             all_sbs = sorted(all_sbs)
-            if all_sbs:
-                selected_ms_sbs = st.multiselect("Select sub-buckets:", all_sbs, default=all_sbs[:4], key=f"{kp}ms_sb_sel")
-                if selected_ms_sbs:
-                    # Plot each selected sub-bucket with station as different lines
-                    for sb in selected_ms_sbs:
-                        st.markdown(f"**{sb}:**")
-                        fig_sb, ax_sb = plt.subplots(figsize=(7, 2.5))
-                        for idx, (station_name, data) in enumerate(has_data.items()):
-                            sdf = pd.DataFrame(data)
-                            if sb in sdf.columns:
-                                color = station_colors[idx % len(station_colors)]
-                                ax_sb.plot(sdf["Week"], sdf[sb].fillna(0), marker="o", linewidth=1.5, label=station_name, color=color)
-                        ax_sb.set_xlabel("Week", fontsize=8); ax_sb.set_ylabel("Count", fontsize=8)
-                        ax_sb.set_title(f"{sb[:40]}", fontsize=8); ax_sb.legend(fontsize=7)
-                        ax_sb.tick_params(labelsize=7); plt.xticks(rotation=45); plt.tight_layout()
-                        st.pyplot(fig_sb)
+            selected_ms_sbs = st.multiselect("Select sub-buckets to compare:", all_sbs, default=all_sbs[:4], key=f"{kp}ms_sb_sel")
+            if selected_ms_sbs:
+                for sb in selected_ms_sbs:
+                    st.markdown(f"**{sb}:**")
+                    fig_sb, ax_sb = plt.subplots(figsize=(7, 2.5))
+                    for idx, (station_name, data) in enumerate(has_data.items()):
+                        sdf = pd.DataFrame(data)
+                        if sb in sdf.columns:
+                            color = station_colors[idx % len(station_colors)]
+                            ax_sb.plot(sdf["Week"], sdf[sb].fillna(0), marker="o", linewidth=1.5, label=station_name, color=color)
+                    ax_sb.set_xlabel("Week", fontsize=8); ax_sb.set_ylabel("Count", fontsize=8)
+                    ax_sb.set_title(f"{sb[:45]}", fontsize=8); ax_sb.legend(fontsize=7)
+                    ax_sb.tick_params(labelsize=7); plt.xticks(rotation=45); plt.tight_layout()
+                    st.pyplot(fig_sb)
+
+        # ─── FULL ANALYSIS FROM CSVs ─────────────────────────────────
+        has_csv_data = any(len(dfs) >= 2 for dfs in all_station_dfs.values())
+        if has_csv_data:
+            st.markdown("---")
+            if st.checkbox("🔬 Run full analysis across all weeks (per station)", key=f"{kp}ms_full_analysis"):
+                for station_name in names:
+                    dfs = all_station_dfs[station_name]
+                    if len(dfs) >= 2:
+                        combined = pd.concat(dfs, ignore_index=True)
+                        combined_total = len(combined)
+                        st.markdown(f"---")
+                        st.markdown(f"### 🔬 {station_name} — Combined Analysis ({combined_total} parcels, {len(dfs)} weeks)")
+
+                        # OTR vs UTR
+                        if "sub_bucket" in combined.columns:
+                            combined["Type"] = combined["sub_bucket"].apply(classify_otr_utr)
+                            otr_n = len(combined[combined["Type"]=="OTR"])
+                            utr_n = len(combined[combined["Type"]=="UTR"])
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("Total", combined_total)
+                            c2.metric("UTR (Station)", utr_n)
+                            c3.metric("OTR (Road)", otr_n)
+
+                        # Sub-bucket breakdown
+                        if "sub_bucket" in combined.columns:
+                            sb_counts = combined["sub_bucket"].dropna().value_counts()
+                            sb_tbl = sb_counts.reset_index()
+                            sb_tbl.columns = ["Sub Bucket", "Total"]
+                            sb_tbl["% of All"] = (sb_tbl["Total"] / combined_total * 100).round(1)
+                            sb_tbl.index = range(1, len(sb_tbl)+1)
+                            st.dataframe(sb_tbl, width="stretch")
+
+                        # Loss reasons
+                        if "previous_reason" in combined.columns:
+                            lr = combined["previous_reason"].replace({"NOREASON":"No Reason","NONE":"No Reason"}).fillna("Unknown").value_counts()
+                            lr_tbl = lr.head(10).reset_index()
+                            lr_tbl.columns = ["Loss Reason", "Total"]
+                            lr_tbl.index = range(1, len(lr_tbl)+1)
+                            st.dataframe(lr_tbl, width="stretch")
+
+                        # Shift distribution
+                        if "sub_bucket" in combined.columns:
+                            combined["Shift"] = combined["sub_bucket"].map(SUB_BUCKET_SHIFT_MAP).fillna("Unknown")
+                            shift_counts = combined["Shift"].value_counts().reindex(SHIFT_ORDER, fill_value=0)
+                            shift_tbl = pd.DataFrame({
+                                "Shift": SHIFT_ORDER,
+                                "Total": [int(shift_counts.get(s, 0)) for s in SHIFT_ORDER],
+                                "%": [f"{round(shift_counts.get(s,0)/combined_total*100,1)}%" for s in SHIFT_ORDER]
+                            })
+                            shift_tbl.index = range(1, len(shift_tbl)+1)
+                            st.dataframe(shift_tbl, width="stretch")
+
+                        # Cost
+                        if "shipment_value" in combined.columns:
+                            combined["Cost"] = pd.to_numeric(combined["shipment_value"].astype(str).str.replace("[£$,]", "", regex=True), errors="coerce").fillna(0)
+                            total_cost = combined["Cost"].sum()
+                            st.metric(f"Total Cost ({station_name})", fmt_cost(total_cost))
 
     elif any(len(d) == 1 for d in all_station_data.values()):
         st.info("Need at least 2 weeks per station to show a trend.")
     else:
-        st.info("👆 Enter weekly totals for each station above.")
+        st.info("👆 Enter weekly data for each station above.")
 
 
 def _render_trend_chart(weeks_data, kp=""):
