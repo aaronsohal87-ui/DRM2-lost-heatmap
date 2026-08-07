@@ -519,16 +519,44 @@ def render_pnov_tab(df, total, dr, kp=""):
         else:
             st.warning("No driver data for PNOV parcels.")
 
-    with st.expander("📍 PNOV by Cluster"):
-        cl = pnov_df["Cluster"].dropna().value_counts()
-        if len(cl) > 0: st.pyplot(make_bar_horiz(cl.head(15), f"PNOV by Cluster ({dr})", color="purple"))
+    with st.expander("📍 PNOV by Location"):
+        pnov_loc_view = st.selectbox("View by:", ["Cluster", "Aisle"], key=f"{kp}pnov_loc")
+        if pnov_loc_view == "Cluster":
+            cl = pnov_df["Cluster"].dropna().value_counts()
+            if len(cl) > 0: st.pyplot(make_bar_horiz(cl.head(15), f"PNOV by Cluster ({dr})", color="purple"))
+            else: st.info("No cluster data.")
+        else:
+            al = pnov_df["Aisle"].dropna().value_counts()
+            if len(al) > 0: st.pyplot(make_bar_horiz(al.head(15), f"PNOV by Aisle ({dr})", color="teal"))
+            else: st.info("No aisle data.")
 
-    with st.expander("📍 PNOV by Aisle"):
-        al = pnov_df["Aisle"].dropna().value_counts()
-        if len(al) > 0: st.pyplot(make_bar_horiz(al.head(15), f"PNOV by Aisle ({dr})", color="teal"))
-        else: st.info("No aisle data for PNOV parcels.")
+        with st.expander("⚠️ Flagged Drivers (High Loss Count)"):
+            st.caption("Drivers with 3+ PNOV losses are flagged. Share this with DSP managers.")
+        dsp_with_drivers = pnov_df.dropna(subset=["DSP Name"])
+        if "Driver Id" in dsp_with_drivers.columns:
+            driver_counts = dsp_with_drivers.groupby(["DSP Name", "Driver Id"]).agg(
+                Losses=("Tracking ID", "count"), Cost=("Cost (£)", "sum")
+            ).sort_values("Losses", ascending=False).reset_index()
+            flagged = driver_counts[driver_counts["Losses"] >= 3]
+            if len(flagged) > 0:
+                flagged["Cost"] = flagged["Cost"].apply(fmt_cost)
+                flagged.index = range(1, len(flagged)+1)
+                st.error(f"🚨 {len(flagged)} driver(s) flagged with 3+ PNOV losses:")
+                st.dataframe(flagged, width="stretch")
+                st.download_button("⬇️ Download flagged drivers", flagged.to_csv(index=False), "flagged_drivers.csv", "text/csv", key=f"{kp}dl_flagged")
+            else:
+                st.success("✅ No drivers with 3+ PNOV losses.")
+        else:
+            # No Driver Id column — flag by DSP instead
+            dsp_counts = dsp_with_drivers["DSP Name"].value_counts()
+            flagged_dsps = dsp_counts[dsp_counts >= 3]
+            if len(flagged_dsps) > 0:
+                st.error(f"🚨 {len(flagged_dsps)} DSP(s) with 3+ PNOV losses:")
+                st.dataframe(make_table(flagged_dsps, "DSP", "PNOV Losses"), width="stretch")
+            else:
+                st.success("✅ No DSPs with 3+ PNOV losses.")
 
-    with st.expander("📋 All PNOV Tracking IDs"):
+with st.expander("📋 All PNOV Tracking IDs"):
         tid_cols = [c for c in ["Tracking ID","Cluster","Aisle","DSP Name","Driver Id","Driver Type","Cost (£)","Loss Reason"] if c in pnov_df.columns]
         tid_df = pnov_df[tid_cols].reset_index(drop=True)
         tid_df.index = range(1, len(tid_df)+1)
@@ -564,18 +592,6 @@ def render_cost_tab(df, total, dr, kp=""):
             dc.index = range(1,len(dc)+1); st.dataframe(dc,width="stretch")
         else:
             st.info("No OTR parcels with DSP data.")
-    with st.expander("💰 Cost by Flex Driver"):
-        st.caption("Only Flex (CSP_COMPANY_NAME) OTR losses.")
-        flex_otr = df[(df["DSP Name"]=="FLEX DRIVER") & (df["Type"]=="OTR")].copy()
-        if len(flex_otr) > 0:
-            st.metric("Flex OTR Losses", f"{len(flex_otr)} parcels — {fmt_cost(flex_otr['Cost (£)'].sum())}")
-            # Show by cluster if available
-            fc = flex_otr["Cluster"].dropna().value_counts().head(10)
-            if len(fc) > 0:
-                st.markdown("**Flex losses by cluster:**")
-                st.dataframe(make_table(fc, "Cluster", "Count"), width="stretch")
-        else:
-            st.info("No Flex OTR losses found.")
     with st.expander("💰 Cost by Size Tier"):
         sz_cost = df.groupby("Size Category").agg(Count=("Tracking ID","count"), Cost=("Cost (£)","sum")).sort_values("Cost", ascending=False).reset_index()
         sz_cost["Avg/Parcel"] = (sz_cost["Cost"]/sz_cost["Count"]).apply(fmt_cost)
@@ -601,112 +617,6 @@ def render_cost_tab(df, total, dr, kp=""):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FOCUS TAB (simplified — no Associate, bullet points explaining value)
-# ═══════════════════════════════════════════════════════════════════════════════
-def render_deep_dive_tab(df, total, dr, kp=""):
-    if total == 0: st.warning("No data."); return
-    st.markdown("### 🔎 Deep Dive")
-    st.markdown("""
-**Select a metric and a specific value to see everything about it in one place.**
-- Cross-references that other tabs don't show (e.g. which aisles within a cluster, which sub-buckets a DSP loses)
-- Use when you've spotted a problem in Summary/Locations and want to dig into the detail
-""")
-    metric = st.selectbox("Focus on:", ["Cluster", "DSP", "Aisle", "Shift", "Sub Bucket", "Size Category"], key=f"{kp}focus_metric")
-
-    if metric == "Cluster":
-        cc = df["Cluster"].dropna().value_counts()
-        if len(cc) == 0: st.info("No cluster data."); return
-        ctbl = df.dropna(subset=["Cluster"]).groupby("Cluster").agg(
-            Parcels=("Tracking ID","count"), Cost=("Cost (£)","sum"),
-            Top_Aisle=("Aisle", lambda x: x.value_counts().index[0] if len(x.dropna())>0 else "N/A"),
-            Top_Shift=("Shift", lambda x: x.value_counts().index[0] if len(x.dropna())>0 else "N/A")
-        ).sort_values("Parcels", ascending=False).reset_index()
-        ctbl["% of Total"] = (ctbl["Parcels"] / total * 100).round(1)
-        ctbl["Cost"] = ctbl["Cost"].apply(fmt_cost); ctbl.index = range(1, len(ctbl)+1)
-        st.dataframe(ctbl, width="stretch")
-        st.pyplot(make_bar_horiz(cc.head(10), "Worst 10 Clusters", color="steelblue"))
-        sel = st.selectbox("Drill into cluster:", sorted(cc.index.tolist()), key=f"{kp}focus_cl")
-        filt = df[df["Cluster"]==sel]
-        st.write(f"**{sel}:** {len(filt)} parcels, {fmt_cost(filt['Cost (£)'].sum())}")
-        ad = filt["Aisle"].dropna().value_counts()
-        if len(ad)>0: st.pyplot(make_bar_horiz(ad, f"{sel} — Aisles", color="teal"))
-        sd = filt[filt["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts().reindex(SHIFT_ORDER, fill_value=0)
-        st.pyplot(make_bar_shift(sd, f"{sel} — Shifts"))
-
-    elif metric == "DSP":
-        dsp_data = df.dropna(subset=["DSP Name"])
-        if len(dsp_data)==0: st.info("No DSP data."); return
-        dc = dsp_data["DSP Name"].value_counts()
-        has_did = "Driver Id" in dsp_data.columns and dsp_data["Driver Id"].notna().any()
-        if has_did:
-            dtbl = dsp_data.groupby("DSP Name").agg(
-                Parcels=("Tracking ID","count"), Cost=("Cost (£)","sum"),
-                Driver_IDs=("Driver Id", lambda x: ", ".join(sorted(x.dropna().unique()[:5]))),
-                Top_Reason=("Loss Reason", lambda x: x.value_counts().index[0] if len(x.dropna())>0 else "N/A")
-            ).sort_values("Parcels", ascending=False).reset_index()
-        else:
-            dtbl = dsp_data.groupby("DSP Name").agg(
-                Parcels=("Tracking ID","count"), Cost=("Cost (£)","sum"),
-                Top_Reason=("Loss Reason", lambda x: x.value_counts().index[0] if len(x.dropna())>0 else "N/A")
-            ).sort_values("Parcels", ascending=False).reset_index()
-        dtbl["% of Total"] = (dtbl["Parcels"] / total * 100).round(1)
-        dtbl["Cost"] = dtbl["Cost"].apply(fmt_cost); dtbl.index = range(1, len(dtbl)+1)
-        st.dataframe(dtbl, width="stretch")
-        st.pyplot(make_bar_horiz(dc.head(10), "Worst 10 DSPs", color="firebrick", max_label=DSP_MAX))
-
-    elif metric == "Aisle":
-        ac = df["Aisle"].dropna().value_counts()
-        if len(ac)==0: st.info("No aisle data."); return
-        atbl = df.dropna(subset=["Aisle"]).groupby("Aisle").agg(
-            Parcels=("Tracking ID","count"), Cost=("Cost (£)","sum"),
-            Cluster=("Cluster", lambda x: x.value_counts().index[0] if len(x.dropna())>0 else "N/A"),
-            Top_Shift=("Shift", lambda x: x.value_counts().index[0] if len(x.dropna())>0 else "N/A")
-        ).sort_values("Parcels", ascending=False).reset_index()
-        atbl["% of Total"] = (atbl["Parcels"] / total * 100).round(1)
-        atbl["Cost"] = atbl["Cost"].apply(fmt_cost); atbl.index = range(1, len(atbl)+1)
-        st.dataframe(atbl, width="stretch")
-        st.pyplot(make_bar_horiz(ac.head(10), "Worst 10 Aisles", color="teal"))
-
-    elif metric == "Shift":
-        sc = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts().reindex(SHIFT_ORDER, fill_value=0)
-        stbl = df[df["Shift"].isin(SHIFT_ORDER)].groupby("Shift").agg(
-            Parcels=("Tracking ID","count"), Cost=("Cost (£)","sum"),
-            Top_Cluster=("Cluster", lambda x: x.value_counts().index[0] if len(x.dropna())>0 else "N/A"),
-            Top_Sub_Bucket=("Sub Bucket", lambda x: x.value_counts().index[0] if len(x.dropna())>0 else "N/A")
-        ).reindex(SHIFT_ORDER).reset_index()
-        stbl["% of Total"] = (stbl["Parcels"] / total * 100).round(1)
-        stbl["Cost"] = stbl["Cost"].apply(fmt_cost); stbl.index = range(1, len(stbl)+1)
-        st.dataframe(stbl, width="stretch")
-        st.pyplot(make_bar_shift(sc, f"By Shift ({dr})"))
-
-    elif metric == "Sub Bucket":
-        sbc = df["Sub Bucket"].dropna().value_counts()
-        if len(sbc)==0: st.info("No sub-bucket data."); return
-        sbtbl = df.dropna(subset=["Sub Bucket"]).groupby("Sub Bucket").agg(
-            Parcels=("Tracking ID","count"), Cost=("Cost (£)","sum"),
-            Type=("Type", "first"),
-            Top_Cluster=("Cluster", lambda x: x.value_counts().index[0] if len(x.dropna())>0 else "N/A")
-        ).sort_values("Parcels", ascending=False).reset_index()
-        sbtbl["% of Total"] = (sbtbl["Parcels"] / total * 100).round(1)
-        sbtbl["Cost"] = sbtbl["Cost"].apply(fmt_cost); sbtbl.index = range(1, len(sbtbl)+1)
-        st.dataframe(sbtbl, width="stretch")
-        st.pyplot(make_bar_horiz(sbc, "Sub Buckets", color="teal"))
-
-    elif metric == "Size Category":
-        szc = df["Size Category"].value_counts()
-        if len(szc)==0: st.info("No size data."); return
-        sztbl = df.groupby("Size Category").agg(
-            Parcels=("Tracking ID","count"), Cost=("Cost (£)","sum"),
-            Top_Cluster=("Cluster", lambda x: x.value_counts().index[0] if len(x.dropna())>0 else "N/A")
-        ).sort_values("Parcels", ascending=False).reset_index()
-        sztbl["% of Total"] = (sztbl["Parcels"] / total * 100).round(1)
-        sztbl["Cost"] = sztbl["Cost"].apply(fmt_cost); sztbl.index = range(1, len(sztbl)+1)
-        st.dataframe(sztbl, width="stretch")
-        size_order = ["Small Envelope","Standard Envelope","Standard Parcel","Small Oversize","Standard Oversize","Large Oversize","Unknown"]
-        sc_ordered = szc.reindex([s for s in size_order if s in szc.index])
-        st.pyplot(make_bar_horiz(sc_ordered, "By Size Category"))
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ANALYSIS & TREND TAB
 # ═══════════════════════════════════════════════════════════════════════════════
 def run_analysis(df, total, dr, kp=""):
     """Run the full analysis — used both for single-week and multi-week combined."""
@@ -838,14 +748,21 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
 
         if trend_mode == "📝 Type values only":
             num_weeks = st.slider("How many weeks?", 1, 12, 4, key=f"{kp}nw")
+            include_sb = st.checkbox("Include sub-bucket breakdown", key=f"{kp}inc_sb")
             weeks_data = []
-            cols = st.columns(min(num_weeks, 6))
+            SUB_BUCKETS_INPUT = ["Lost At Station", "Lost On Road", "Lost Between Stations", "Other Lost"]
             for i in range(num_weeks):
-                with cols[i % 6]:
-                    wk_label = st.text_input(f"Week {i+1}:", value=f"W{i+1}", key=f"{kp}wl{i}")
+                with st.expander(f"Week {i+1}", expanded=(i < 2)):
+                    wk_label = st.text_input(f"Label:", value=f"W{i+1}", key=f"{kp}wl{i}")
                     wk_count = st.number_input(f"Total lost:", min_value=0, value=0, step=1, key=f"{kp}wc{i}")
+                    row = {"Week": wk_label, "Total": int(wk_count)}
+                    if include_sb and wk_count > 0:
+                        sb_cols = st.columns(len(SUB_BUCKETS_INPUT))
+                        for j, sb_name in enumerate(SUB_BUCKETS_INPUT):
+                            with sb_cols[j]:
+                                row[sb_name] = st.number_input(sb_name, min_value=0, value=0, step=1, key=f"{kp}sb{i}_{j}")
                     if wk_count > 0:
-                        weeks_data.append({"Week": wk_label, "Total": int(wk_count)})
+                        weeks_data.append(row)
             _render_trend_chart(weeks_data, kp)
 
         elif trend_mode == "📂 Upload CSVs only":
@@ -908,7 +825,15 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
                     if input_type == "Type value":
                         wk_count = st.number_input("Total lost:", min_value=0, value=0, step=1, key=f"{kp}mc{i}")
                         if wk_count > 0:
-                            weeks_data.append({"Week": wk_label, "Total": int(wk_count)})
+                            row = {"Week": wk_label, "Total": int(wk_count)}
+                            sb_exp = st.checkbox("Add sub-bucket breakdown", key=f"{kp}mx_sb_{i}")
+                            if sb_exp:
+                                SB_MIX = ["Lost At Station", "Lost On Road", "Lost Between Stations", "Other Lost"]
+                                sb_cols = st.columns(4)
+                                for j, sbn in enumerate(SB_MIX):
+                                    with sb_cols[j]:
+                                        row[sbn] = st.number_input(sbn, min_value=0, value=0, step=1, key=f"{kp}mx_sb_{i}_{j}")
+                            weeks_data.append(row)
                     else:
                         f_up = st.file_uploader("PM CSV:", type="csv", key=f"{kp}mfu{i}")
                         if f_up:
@@ -1072,14 +997,13 @@ elif mode == "Single Station":
         c1.metric("Lost", total); c2.metric("Cost", fmt_cost(tc)); c3.metric("Cluster", safe_top(df["Cluster"]))
         c4.metric("Aisle", safe_top(df["Aisle"])); c5.metric("DSP", str(safe_top(df["DSP Name"]))[:15])
         sk = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"]; c6.metric("Shift", safe_top(sk) if len(sk)>0 else "N/A")
-        t1,t2,t3,t4,t5,t6,t7 = st.tabs(["📊 Summary","📍 Locations","📦 PNOV","💰 Cost Breakdown","🔎 Deep Dive","🔬 Analysis & Trend","💾 Export"])
+        t1,t2,t3,t4,t5,t6 = st.tabs(["📊 Summary","📍 Locations","📦 PNOV","💰 Cost Breakdown","🔬 Analysis & Trend","💾 Export"])
         with t1: render_summary_tab(df, total, dr, kp="s_")
         with t2: render_locations_tab(df, total, dr, kp="s_")
         with t3: render_pnov_tab(df, total, dr, kp="s_")
         with t4: render_cost_tab(df, total, dr, kp="s_")
-        with t5: render_deep_dive_tab(df, total, dr, kp="s_")
-        with t6: render_analysis_trend_tab(df, total, dr, kp="s_")
-        with t7: render_export_tab(df, total, dr, kp="s_")
+        with t5: render_analysis_trend_tab(df, total, dr, kp="s_")
+        with t6: render_export_tab(df, total, dr, kp="s_")
     else:
         st.info("👆 Upload both files.")
 
@@ -1108,7 +1032,7 @@ else:
             for n in names:
                 sc_val, sc_col, sc_lab, sc_reas = render_health_score(stations[n], len(stations[n]))
                 st.caption(f"{n}: {sc_col} {sc_val}/10 — {sc_lab}" + (f" ({', '.join(sc_reas)})" if sc_reas else ""))
-            t1,t2,t3,t4,t5,t6,t7 = st.tabs(["📊 Summary","📍 Locations","📦 PNOV","💰 Cost Breakdown","🔎 Deep Dive","🔬 Analysis & Trend","💾 Export"])
+            t1,t2,t3,t4,t5,t6 = st.tabs(["📊 Summary","📍 Locations","📦 PNOV","💰 Cost Breakdown","🔬 Analysis & Trend","💾 Export"])
             with t1:
                 for n in names:
                     sdf = stations[n]
@@ -1120,10 +1044,8 @@ else:
             with t4:
                 sel = st.selectbox("Dataset:", names, key="mcc"); render_cost_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mc{sel}_")
             with t5:
-                sel = st.selectbox("Dataset:", names, key="mcf"); render_deep_dive_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mf{sel}_")
-            with t6:
                 sel = st.selectbox("Dataset:", names, key="mca"); render_analysis_trend_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"ma{sel}_")
-            with t7:
+            with t6:
                 sel = st.selectbox("Dataset:", names, key="mce"); render_export_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"me{sel}_", station_name=sel)
     elif len(uploaded) == 1: st.warning("Need 2+ datasets to compare.")
     else: st.info("👆 Upload pairs of PM + SCC files above.")
