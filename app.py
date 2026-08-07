@@ -775,7 +775,7 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
             _render_trend_chart(weeks_data, kp)
 
         elif trend_mode == "📂 Upload CSVs only":
-            st.caption("Upload one PM CSV per week. Count = number of rows. Optionally run analysis across all weeks combined.")
+            st.caption("Upload one **PerfectMile** CSV per week (PerfectMile → L&U → Lost → Export CSV). Each file = one week. Count = number of rows.")
             num_files = st.slider("How many weeks?", 1, 12, 4, key=f"{kp}nf")
             weeks_data = []
             uploaded_dfs = []
@@ -922,6 +922,7 @@ def render_multi_station_trend(stations, names, kp=""):
                                         all_station_data[station_name][-1][bucket] = bd_val
 
             elif input_method == "📂 Upload CSVs":
+                st.caption("Upload **PerfectMile** CSVs only (L&U → Lost → Export). One per station per week.")
                 cols = st.columns(len(names))
                 for j, station_name in enumerate(names):
                     with cols[j]:
@@ -1143,9 +1144,11 @@ if mode == "📖 Guide":
     render_guide()
 
 elif mode == "Single Station":
+    st.caption("⚠️ **SCC data is only available for 4 weeks on PerfectMile.** Upload your PM and SCC CSVs below. "
+               "For trend analysis, you only need the PM CSV (one per week from PerfectMile → L&U → Lost → Export).")
     c_pm, c_scc = st.columns(2)
-    with c_pm: pm_file = st.file_uploader("📊 Perfect Mile", type="csv", key="pm")
-    with c_scc: scc_file = st.file_uploader("📋 SCC", type="csv", key="scc")
+    with c_pm: pm_file = st.file_uploader("📊 Perfect Mile CSV", type="csv", key="pm")
+    with c_scc: scc_file = st.file_uploader("📋 SCC CSV", type="csv", key="scc")
     if pm_file and scc_file:
         try:
             pm_df = pd.read_csv(pm_file)
@@ -1181,7 +1184,8 @@ elif mode == "Single Station":
         st.info("👆 Upload both files.")
 
 else:
-    st.caption("Upload multiple stations or time periods to compare.")
+    st.caption("Upload multiple stations or time periods to compare. "
+               "⚠️ SCC data only available for 4 weeks. For trend analysis, only PM CSVs are needed (one per week).")
     num = st.slider("Datasets to compare:", 2, 5, 2, key="ns"); uploaded = {}
     for i in range(num):
         with st.expander(f"Dataset {i+1}", expanded=(i<2)):
