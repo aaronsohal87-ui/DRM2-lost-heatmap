@@ -788,9 +788,17 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
                 if f_up:
                     try:
                         wdf = pd.read_csv(f_up)
-                        weeks_data.append({"Week": wk_label, "Total": len(wdf)})
+                        row = {"Week": wk_label, "Total": len(wdf)}
+                        # Auto-extract sub-bucket breakdown from the CSV
+                        if "sub_bucket" in wdf.columns:
+                            sb_counts = wdf["sub_bucket"].dropna().value_counts()
+                            for sb_name, sb_count in sb_counts.items():
+                                row[sb_name] = int(sb_count)
+                            st.caption(f"  → {wk_label}: {len(wdf)} parcels ({len(sb_counts)} sub-buckets detected)")
+                        else:
+                            st.caption(f"  → {wk_label}: {len(wdf)} parcels")
+                        weeks_data.append(row)
                         uploaded_dfs.append(wdf)
-                        st.caption(f"  → {wk_label}: {len(wdf)} parcels")
                     except Exception as e:
                         st.error(f"Error reading {wk_label}: {e}")
             _render_trend_chart(weeks_data, kp)
@@ -833,30 +841,37 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
                     input_type = st.radio("Input:", ["Type value", "Upload CSV"], horizontal=True, key=f"{kp}mit{i}")
                     if input_type == "Type value":
                         wk_count = st.number_input("Total lost:", min_value=0, value=0, step=1, key=f"{kp}mc{i}")
+                        row = {"Week": wk_label, "Total": int(wk_count)}
+                        sb_exp = st.checkbox("Add sub-bucket breakdown", key=f"{kp}mx_sb_{i}")
+                        if sb_exp:
+                            sb_names_mix = sorted(df["Sub Bucket"].dropna().unique().tolist()) if "Sub Bucket" in df.columns else []
+                            if not sb_names_mix:
+                                sb_names_mix = ["Lost At Station - Inducted Not Stowed", "Lost At Station - Stowed Not Picked Up",
+                                                "Lost At Station - Debrief Receive(RTS)", "Lost On Road - No Further Status",
+                                                "Lost On Road - Attempted", "Lost On Road - Damage"]
+                            st.caption("Sub-bucket breakdown (optional — leave 0 if unknown):")
+                            for j in range(0, len(sb_names_mix), 3):
+                                sb_row = sb_names_mix[j:j+3]
+                                sb_cols = st.columns(len(sb_row))
+                                for k, sbn in enumerate(sb_row):
+                                    with sb_cols[k]:
+                                        row[sbn] = st.number_input(sbn, min_value=0, value=0, step=1, key=f"{kp}mx_sb_{i}_{j+k}")
                         if wk_count > 0:
-                            row = {"Week": wk_label, "Total": int(wk_count)}
-                            sb_exp = st.checkbox("Add sub-bucket breakdown", key=f"{kp}mx_sb_{i}")
-                            if sb_exp:
-                                sb_names_mix = sorted(df["Sub Bucket"].dropna().unique().tolist()) if "Sub Bucket" in df.columns else []
-                                if not sb_names_mix:
-                                    sb_names_mix = ["Lost At Station - Inducted Not Stowed", "Lost At Station - Stowed Not Picked Up",
-                                                    "Lost At Station - Debrief Receive(RTS)", "Lost On Road - No Further Status",
-                                                    "Lost On Road - Attempted", "Lost On Road - Damage"]
-                                st.caption("Sub-bucket breakdown:")
-                                for j in range(0, len(sb_names_mix), 3):
-                                    sb_row = sb_names_mix[j:j+3]
-                                    sb_cols = st.columns(len(sb_row))
-                                    for k, sbn in enumerate(sb_row):
-                                        with sb_cols[k]:
-                                            row[sbn] = st.number_input(sbn, min_value=0, value=0, step=1, key=f"{kp}mx_sb_{i}_{j+k}")
                             weeks_data.append(row)
                     else:
                         f_up = st.file_uploader("PM CSV:", type="csv", key=f"{kp}mfu{i}")
                         if f_up:
                             try:
                                 wdf = pd.read_csv(f_up)
-                                weeks_data.append({"Week": wk_label, "Total": len(wdf)})
-                                st.caption(f"→ {len(wdf)} parcels")
+                                row = {"Week": wk_label, "Total": len(wdf)}
+                                if "sub_bucket" in wdf.columns:
+                                    sb_counts = wdf["sub_bucket"].dropna().value_counts()
+                                    for sb_name, sb_count in sb_counts.items():
+                                        row[sb_name] = int(sb_count)
+                                    st.caption(f"→ {len(wdf)} parcels ({len(sb_counts)} sub-buckets)")
+                                else:
+                                    st.caption(f"→ {len(wdf)} parcels")
+                                weeks_data.append(row)
                             except Exception as e:
                                 st.error(f"Error: {e}")
             _render_trend_chart(weeks_data, kp)
@@ -864,14 +879,17 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
 def _render_trend_chart(weeks_data, kp=""):
     if len(weeks_data) >= 2:
         weekly = pd.DataFrame(weeks_data)
+        # Total trend line
         fig, ax = plt.subplots(figsize=(7, 3))
-        ax.plot(weekly["Week"], weekly["Total"], marker="o", color="steelblue", linewidth=2)
+        ax.plot(weekly["Week"], weekly["Total"], marker="o", color="steelblue", linewidth=2, label="Total")
         for i, row in weekly.iterrows():
             ax.annotate(str(int(row["Total"])), xy=(row["Week"], row["Total"]), xytext=(0, 8), textcoords="offset points", ha="center", fontsize=8)
         avg = weekly["Total"].mean()
         ax.axhline(y=avg, color="gray", linestyle="--", linewidth=1, alpha=0.7)
         ax.set_xlabel("Week", fontsize=8); ax.set_ylabel("Losses", fontsize=8)
         ax.set_title("Lost Parcels per Week", fontsize=9); ax.tick_params(labelsize=7)
+        max_val = weekly["Total"].max()
+        if max_val > 0: ax.set_ylim(top=max_val * 1.2)
         plt.xticks(rotation=45); plt.tight_layout()
         st.pyplot(fig)
         first_w = int(weekly.iloc[0]["Total"]); last_w = int(weekly.iloc[-1]["Total"])
@@ -879,7 +897,28 @@ def _render_trend_chart(weeks_data, kp=""):
         if last_w < first_w * 0.8: st.success(f"📉 **Improving!** {first_w} → {last_w} ({pct_change:+.1f}%)")
         elif last_w > first_w * 1.2: st.error(f"📈 **Getting worse.** {first_w} → {last_w} ({pct_change:+.1f}%)")
         else: st.info(f"➡️ **Stable.** {first_w} → {last_w} ({pct_change:+.1f}%)")
-        st.download_button("⬇️ Download trend", weekly.to_csv(index=False), "weekly_trend.csv", "text/csv", key=f"{kp}dl_trend")
+
+        # Sub-bucket trend lines (if data available)
+        sb_cols = [c for c in weekly.columns if c not in ["Week", "Total"] and weekly[c].sum() > 0]
+        if sb_cols:
+            st.markdown("---")
+            st.markdown("**📊 Sub-Bucket Trend:**")
+            sb_colors = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6", "#1abc9c", "#e67e22", "#34495e"]
+            fig2, ax2 = plt.subplots(figsize=(7, 3.5))
+            for idx, sb in enumerate(sb_cols):
+                c = sb_colors[idx % len(sb_colors)]
+                vals = weekly[sb].fillna(0)
+                ax2.plot(weekly["Week"], vals, marker="o", linewidth=1.5, label=sb[:30], color=c)
+            ax2.set_xlabel("Week", fontsize=8); ax2.set_ylabel("Losses", fontsize=8)
+            ax2.set_title("Sub-Bucket Trend", fontsize=9); ax2.tick_params(labelsize=7)
+            ax2.legend(fontsize=6, loc="upper right", bbox_to_anchor=(1.0, 1.0))
+            plt.xticks(rotation=45); plt.tight_layout()
+            st.pyplot(fig2)
+            # Table
+            sb_table = weekly[["Week"] + sb_cols].copy()
+            st.dataframe(sb_table, width="stretch")
+
+        st.download_button("⬇️ Download trend data", weekly.to_csv(index=False), "weekly_trend.csv", "text/csv", key=f"{kp}dl_trend")
     elif len(weeks_data) == 1:
         st.info("Need at least 2 weeks to show a trend.")
 
