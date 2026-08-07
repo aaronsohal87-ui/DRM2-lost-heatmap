@@ -250,8 +250,24 @@ def render_locations_tab(df, total, dr, kp=""):
 
 
 def render_opportunities_tab(df, total, dr, kp=""):
-    with st.expander("📖 Shift assignment logic"):
-        st.markdown("| Sub Bucket | Shift |\n|---|---|\n| Inducted Not Stowed | NS |\n| Stowed Not Picked Up | AM |\n| Debrief Receive(RTS) | PM |\n| Lost On Road - * | OTR |\n| PNOV / UTR Reprocess / Other | Time-based (hour of last scan) |")
+    with st.expander("📖 How shift & lost date are assigned"):
+        st.markdown("""
+**How is the shift assigned?**
+
+| If the parcel has... | Shift = |
+|---------------------|---------|
+| Sub bucket = "Inducted Not Stowed" | NS (Night Sort) |
+| Sub bucket = "Stowed Not Picked Up" | AM |
+| Sub bucket = "Debrief Receive(RTS)" | PM |
+| Sub bucket = "Lost On Road - *" | OTR |
+| None of the above | Time of last scan (hour-based) |
+
+**How is the "lost date" determined?**
+
+The date shown is when **Perfect Mile marked the parcel as lost** (`event_datetime`). This is the timestamp when the system flagged it — NOT necessarily when it physically went missing. A parcel that went missing on Friday night might only be flagged lost on Monday when the system times out waiting for a scan.
+
+The time of the last scan before it was lost (`previous_event_datetime`) is what determines the shift assignment for non-obvious sub-buckets.
+""")
     sc = df[df["Shift"]!="Unknown"]["Shift"].value_counts(); unk = len(df[df["Shift"]=="Unknown"])
     with st.expander("🏆 Shift Opportunity Leaderboard"):
         rows = []
@@ -267,17 +283,26 @@ def render_opportunities_tab(df, total, dr, kp=""):
         sdf = df[df["Shift"]==ss]
         if len(sdf)>0:
             st.write(f"**{ss}: {len(sdf)} parcels** — {fmt_cost(sdf['Cost (£)'].sum())}")
+            # Filter by reason
+            reasons_available = ["All"] + sorted(sdf["Loss Reason"].dropna().unique().tolist())
+            reason_filter = st.selectbox("Filter by reason:", reasons_available, key=f"{kp}rf")
+            if reason_filter != "All":
+                sdf = sdf[sdf["Loss Reason"] == reason_filter]
+                st.caption(f"Showing {len(sdf)} parcels with reason: {reason_filter}")
             sbc = sdf["Sub Bucket"].value_counts()
             vm = st.radio("View:",["Sub Buckets","All Tracking IDs"],horizontal=True,key=f"{kp}sd")
             if vm=="Sub Buckets":
                 st.dataframe(make_table(sbc,"Sub Bucket","Count"),width="stretch")
             else:
-                tid_cols = [c for c in ["Tracking ID","Sub Bucket","Type","Cluster","Aisle","DSP Name","Cost (£)","Loss Reason","Day of Week"] if c in sdf.columns]
-                tid_df = sdf[tid_cols].reset_index(drop=True)
+                tid_cols = [c for c in ["Tracking ID","Marked Lost DT","Sub Bucket","Type","Cluster","Aisle","DSP Name","Cost (£)","Loss Reason","Day of Week"] if c in sdf.columns]
+                tid_df = sdf[tid_cols].copy()
+                # Sort by date (most recent first)
+                if "Marked Lost DT" in tid_df.columns:
+                    tid_df = tid_df.sort_values("Marked Lost DT", ascending=True, na_position="last")
+                tid_df = tid_df.reset_index(drop=True)
                 tid_df.index = range(1, len(tid_df)+1)
                 st.dataframe(tid_df, width="stretch", height=400)
                 st.download_button(f"⬇️ Download {ss} parcels", tid_df.to_csv(index=False), f"{ss}_parcels.csv", "text/csv", key=f"{kp}dl_{ss}")
-
 
 def render_cost_tab(df, total, dr, kp=""):
     tc = df["Cost (£)"].sum(); avg = tc/total if total>0 else 0
@@ -328,6 +353,25 @@ def render_analysis_tab(df, total, dr, kp=""):
         "but **SHOULD NOT BE USED AS A GUIDE, IT IS ONLY AN AID.** "
         "Always use your own judgement and local knowledge when deciding on actions."
     )
+
+
+    with st.expander("📐 Statistical tests used (for managers)"):
+        st.markdown("""
+**What tests does this tool use and why?**
+
+| Test | Used for | What it tells you | Why this test |
+|------|---------|-------------------|---------------|
+| **Chi-squared (χ²)** | Shift balance, Day of week | "Is the imbalance real or just random chance?" | Standard test for comparing observed vs expected counts. If p < 0.05, there's less than 5% chance the pattern is random. |
+| **Gini coefficient** | Cluster concentration | "Are losses piling up in a few spots or spread evenly?" | Ranges 0→1. Higher = more concentrated. Used in economics for inequality — here it measures loss inequality across locations. |
+| **Z-score** | DSP outlier detection | "Is this DSP genuinely worse or just slightly above average?" | Measures how many standard deviations from the mean. Z > 1.5 = statistically unusual, not just a small difference. |
+
+**How to explain this to stakeholders:**
+- "The tool checks whether patterns in the data are **statistically significant** — meaning unlikely to happen by chance."
+- "For example, if NS shift has 30 losses and AM has 10, the chi-squared test tells us whether that gap is big enough to be meaningful, or if it could just be random variation from a small sample."
+- "A p-value < 0.05 means: *if losses were truly random across shifts, there's less than a 5% chance we'd see this much imbalance.*"
+
+**Important caveat:** Statistical significance ≠ practical importance. A pattern can be statistically real but too small to be worth acting on. Always pair these numbers with your on-the-ground knowledge.
+""")
 
     total_cost = df["Cost (£)"].sum()
     findings = []
@@ -625,10 +669,24 @@ def render_analysis_tab(df, total, dr, kp=""):
 def render_heatmap_tab(df, total, dr, kp=""):
     """Cluster x Shift heatmap."""
     st.markdown("#### 🗺️ Heatmap — Cluster × Shift")
-    st.caption("Darker = more losses. Shows WHERE and WHEN losses happen together.")
+    with st.expander("❓ What is this?", expanded=False):
+        st.markdown("""
+This is a **grid showing losses by location AND time together**.
+
+- **Rows** = physical clusters in the station (where parcels are stored)
+- **Columns** = shift windows (NS, AM, PM, OTR)
+- **Each cell number** = how many parcels were lost in that cluster during that shift
+- **Colour** = darker red means more losses in that cell
+
+**How to read it:** Look for the darkest cells — those are your hotspots. If cluster "B3" is dark red under "NS" but light under "AM", it means most losses in B3 happen during night sort (stow process), not during pick.
+
+**Why it matters:** Instead of just knowing "B3 is bad" (Locations tab) or "NS is bad" (Shifts tab), this shows you the EXACT combination — e.g. "B3 during NS" — so you know precisely where and when to investigate.
+
+Only the top 15 clusters (by loss count) are shown to keep it readable.
+""")
     clusters_with_data = df["Cluster"].dropna().value_counts().head(15).index.tolist()
     if len(clusters_with_data) < 2:
-        st.warning("Need 2+ clusters with data."); return
+        st.warning("Need 2+ clusters with data to generate a heatmap."); return
     hm_df = df[df["Cluster"].isin(clusters_with_data) & df["Shift"].isin(SHIFT_ORDER)]
     if len(hm_df) == 0:
         st.warning("No data for heatmap."); return
@@ -650,10 +708,15 @@ def render_heatmap_tab(df, total, dr, kp=""):
     worst_cell = pivot.stack().idxmax()
     worst_val = int(pivot.stack().max())
     st.markdown(f"🎯 **Hotspot:** {worst_cell[0]} during **{worst_cell[1]}** shift — {worst_val} losses")
+    st.caption("💡 Tip: Cross-reference this with the Shift Drill-Down to see the actual tracking IDs for that hotspot.")
 
 def render_trend_tab(df, total, dr, kp=""):
     """Week-over-week trend."""
     st.markdown("#### 📈 Week-over-Week Trend")
+    st.warning("⚠️ **Disclaimer:** Trends are only meaningful with enough data. "
+               "Upload at least 3-4 weeks of data for a reliable trend. "
+               "With only 2 weeks, the direction could just be normal variation. "
+               "The more weeks you include, the more confident you can be about whether things are actually improving or getting worse.")
     date_col = None
     for col in ["Marked Lost DT", "Dispatch Time"]:
         if col in df.columns and df[col].dropna().count() >= 14:
