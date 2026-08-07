@@ -199,20 +199,20 @@ def render_locations_tab(df, total, dr, kp=""):
             if len(d)>0:
                 vm = st.radio("View:",["Chart","Table + Cost"],horizontal=True,key=f"{kp}od")
                 if vm=="Chart": st.pyplot(make_bar_horiz(d,f"OTR by DSP ({dr})",color="firebrick",max_label=DSP_MAX))
-                else: st.dataframe(make_cost_table(vdf.dropna(subset=["DSP Name"]),"DSP Name"),use_container_width=True)
+                else: st.dataframe(make_cost_table(vdf.dropna(subset=["DSP Name"]),"DSP Name"),width="stretch")
         with st.expander("📍 Delivery Areas"):
             ab = st.radio("By:",["City","Province","Postal"],horizontal=True,key=f"{kp}oa")
             ad = vdf[ab].dropna().value_counts()
             if len(ad)>0:
                 vm = st.radio("View:",["Chart","Table + Cost"],horizontal=True,key=f"{kp}oav")
                 if vm=="Chart": st.pyplot(make_bar_horiz(ad.head(15),f"OTR by {ab}",color="darkred"))
-                else: st.dataframe(make_cost_table(vdf.dropna(subset=[ab]),ab),use_container_width=True)
+                else: st.dataframe(make_cost_table(vdf.dropna(subset=[ab]),ab),width="stretch")
         with st.expander("❓ Reasons"):
             r = vdf["Loss Reason"].dropna().value_counts()
             if len(r)>0:
                 vm = st.radio("View:",["Chart","Table"],horizontal=True,key=f"{kp}or")
                 if vm=="Chart": st.pyplot(make_bar_horiz(r,"OTR Reasons",color="crimson"))
-                else: st.dataframe(make_table(r,"Reason","Count"),use_container_width=True)
+                else: st.dataframe(make_table(r,"Reason","Count"),width="stretch")
     elif lf == "UTR Only":
         vdf = df[df["Type"]=="UTR"].copy(); st.write(f"**{len(vdf)} UTR** — {fmt_cost(vdf['Cost (£)'].sum())}")
         if len(vdf)==0: return
@@ -221,13 +221,13 @@ def render_locations_tab(df, total, dr, kp=""):
             if len(sb)>0:
                 vm = st.radio("View:",["Chart","Table + Cost"],horizontal=True,key=f"{kp}usb")
                 if vm=="Chart": st.pyplot(make_bar_horiz(sb,"UTR Sub Buckets",color="darkorange"))
-                else: st.dataframe(make_cost_table(vdf,"Sub Bucket"),use_container_width=True)
+                else: st.dataframe(make_cost_table(vdf,"Sub Bucket"),width="stretch")
         with st.expander("📍 By Cluster"):
             cl = vdf["Cluster"].dropna().value_counts()
             if len(cl)>0:
                 vm = st.radio("View:",["Chart","Table + Cost"],horizontal=True,key=f"{kp}ul")
                 if vm=="Chart": st.pyplot(make_bar_horiz(cl,"UTR Clusters",color="darkorange"))
-                else: st.dataframe(make_cost_table(vdf.dropna(subset=["Cluster"]),"Cluster"),use_container_width=True)
+                else: st.dataframe(make_cost_table(vdf.dropna(subset=["Cluster"]),"Cluster"),width="stretch")
     else:
         vdf = df.copy(); st.write(f"**{len(vdf)} all** — {fmt_cost(vdf['Cost (£)'].sum())}")
         with st.expander("🏆 Top 10 Locations"):
@@ -236,7 +236,7 @@ def render_locations_tab(df, total, dr, kp=""):
             if len(rd)>0:
                 vm = st.radio("View:",["Chart","Table + Cost"],horizontal=True,key=f"{kp}lv")
                 if vm=="Chart": st.pyplot(make_bar_horiz(rd,f"Top 10 {rb}s ({dr})",color="darkred"))
-                else: st.dataframe(make_cost_table(vdf.dropna(subset=[rb]),rb).head(10),use_container_width=True)
+                else: st.dataframe(make_cost_table(vdf.dropna(subset=[rb]),rb).head(10),width="stretch")
         with st.expander("🔍 Cluster Drill-Down"):
             clusters = sorted(vdf["Cluster"].dropna().unique())
             if clusters:
@@ -246,7 +246,7 @@ def render_locations_tab(df, total, dr, kp=""):
                 if len(ad)>0:
                     vm = st.radio("View:",["Chart","Table + Cost"],horizontal=True,key=f"{kp}cv")
                     if vm=="Chart": st.pyplot(make_bar_horiz(ad,f"{sel} Aisles",color="steelblue"))
-                    else: st.dataframe(make_cost_table(filt.dropna(subset=["Aisle"]),"Aisle"),use_container_width=True)
+                    else: st.dataframe(make_cost_table(filt.dropna(subset=["Aisle"]),"Aisle"),width="stretch")
 
 
 def render_opportunities_tab(df, total, dr, kp=""):
@@ -259,7 +259,7 @@ def render_opportunities_tab(df, total, dr, kp=""):
             sdf = df[df["Shift"]==s]; n = len(sdf)
             rows.append({"Shift":s,"Lost":n,"%":f"{round(n/total*100,1)}%","Cost":fmt_cost(sdf["Cost (£)"].sum()),"Window":SHIFT_DEFINITIONS[s]})
         rows.sort(key=lambda r:r["Lost"],reverse=True)
-        st.dataframe(pd.DataFrame(rows,index=range(1,len(rows)+1)),use_container_width=True,height=200)
+        st.dataframe(pd.DataFrame(rows,index=range(1,len(rows)+1)),width="stretch",height=200)
         if len(sc)>0: st.pyplot(make_bar_shift(sc,f"By Shift ({dr})"))
     with st.expander("🔍 Shift Drill-Down"):
         opts = [f"{s} — {int(sc.get(s,0))}" for s in SHIFT_ORDER]
@@ -270,12 +270,12 @@ def render_opportunities_tab(df, total, dr, kp=""):
             sbc = sdf["Sub Bucket"].value_counts()
             vm = st.radio("View:",["Sub Buckets","All Tracking IDs"],horizontal=True,key=f"{kp}sd")
             if vm=="Sub Buckets":
-                st.dataframe(make_table(sbc,"Sub Bucket","Count"),use_container_width=True)
+                st.dataframe(make_table(sbc,"Sub Bucket","Count"),width="stretch")
             else:
                 tid_cols = [c for c in ["Tracking ID","Sub Bucket","Type","Cluster","Aisle","DSP Name","Cost (£)","Loss Reason","Day of Week"] if c in sdf.columns]
                 tid_df = sdf[tid_cols].reset_index(drop=True)
                 tid_df.index = range(1, len(tid_df)+1)
-                st.dataframe(tid_df, use_container_width=True, height=400)
+                st.dataframe(tid_df, width="stretch", height=400)
                 st.download_button(f"⬇️ Download {ss} parcels", tid_df.to_csv(index=False), f"{ss}_parcels.csv", "text/csv", key=f"{kp}dl_{ss}")
 
 
@@ -295,7 +295,7 @@ def render_cost_tab(df, total, dr, kp=""):
             ax.barh(trunc(cd.index,30),cd.values,color="teal"); ax.invert_yaxis()
             for i,v in enumerate(cd.values): ax.text(v+0.5,i,fmt_cost(v),va="center",fontsize=6)
             ax.set_xlabel("£",fontsize=8); ax.set_title("Cost by Sub Bucket",fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout(); st.pyplot(fig)
-        else: st.dataframe(csb,use_container_width=True)
+        else: st.dataframe(csb,width="stretch")
     with st.expander("💰 By DSP (with top reason)"):
         dsp_df = df.dropna(subset=["DSP Name"])
         if len(dsp_df)>0:
@@ -313,11 +313,11 @@ def render_cost_tab(df, total, dr, kp=""):
                 ax.barh(trunc(cd2.index,DSP_MAX),cd2.values,color="purple"); ax.invert_yaxis()
                 for i,v in enumerate(cd2.values): ax.text(v+0.5,i,fmt_cost(v),va="center",fontsize=6)
                 ax.set_xlabel("£",fontsize=8); ax.set_title("Cost by DSP",fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout(); st.pyplot(fig)
-            else: st.dataframe(dc,use_container_width=True)
+            else: st.dataframe(dc,width="stretch")
     with st.expander("💰 Top 10 Most Expensive Parcels"):
         top = df.nlargest(10,"Cost (£)")
         sc2 = [c for c in ["Tracking ID","Sub Bucket","Type","Shift","Cost (£)","DSP Name","Cluster","Loss Reason"] if c in top.columns]
-        out = top[sc2].reset_index(drop=True); out.index = range(1,len(out)+1); st.dataframe(out,use_container_width=True)
+        out = top[sc2].reset_index(drop=True); out.index = range(1,len(out)+1); st.dataframe(out,width="stretch")
 
 
 def render_analysis_tab(df, total, dr, kp=""):
@@ -346,7 +346,7 @@ def render_analysis_tab(df, total, dr, kp=""):
     with st.expander("📊 Loss Reasons (table + chart)", expanded=True):
         vm = st.radio("View:", ["Table","Chart (by count)","Chart (by cost)"], horizontal=True, key=f"{kp}lr_view")
         if vm == "Table":
-            st.dataframe(lr_display, use_container_width=True)
+            st.dataframe(lr_display, width="stretch")
         elif vm == "Chart (by count)":
             lrc = lr.set_index("Loss Reason")["Count"].sort_values(ascending=False)
             st.pyplot(make_bar_horiz(lrc, f"Loss Reasons by Count ({dr})", color="coral"))
@@ -388,7 +388,7 @@ def render_analysis_tab(df, total, dr, kp=""):
         st.success(f"✅ All {len(checks)} tests ready!")
     else:
         st.info(f"{ready}/{len(checks)} tests ready. Upload more data to unlock the rest.")
-    st.dataframe(pd.DataFrame(checks, columns=["Question", "Status", "How to fix"]), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(checks, columns=["Question", "Status", "How to fix"]), width="stretch", hide_index=True)
 
     # ─── RESULTS ──────────────────────────────────────────────────────────
     st.markdown("---")
@@ -434,7 +434,7 @@ def render_analysis_tab(df, total, dr, kp=""):
             chi2, p = sp_stats.chisquare(observed, f_exp=expected)
             worst_s = shift_counts.idxmax(); worst_n = int(shift_counts.max())
             tbl = pd.DataFrame({"Shift": SHIFT_ORDER, "Actual": observed.astype(int), "Expected": expected.astype(int), "Over/Under": (observed - expected).astype(int)})
-            tbl.index = range(1, 5); st.dataframe(tbl, use_container_width=True)
+            tbl.index = range(1, 5); st.dataframe(tbl, width="stretch")
             if p < 0.05:
                 st.error(f"🎯 **{worst_s}** shift has {worst_n} losses vs ~{int(expected_per_shift)} expected. Unlikely to be random.")
                 st.caption(f"Window: {SHIFT_DEFINITIONS[worst_s]}")
@@ -462,7 +462,7 @@ def render_analysis_tab(df, total, dr, kp=""):
             display = sb_s[["Sub Bucket", "Count", "Avg £/parcel"]].copy()
             display["Avg £/parcel"] = display["Avg £/parcel"].apply(fmt_cost)
             display.index = range(1, len(display)+1)
-            st.dataframe(display, use_container_width=True)
+            st.dataframe(display, width="stretch")
             st.caption(f"Station average: {fmt_cost(overall_avg)} per lost parcel")
         else:
             st.warning("Need cost data and 2+ loss types.")
@@ -480,7 +480,7 @@ def render_analysis_tab(df, total, dr, kp=""):
                 col1.metric("Avg losses/DSP", f"{mu:.1f}")
                 col2.metric("DSPs tracked", len(dc))
                 tbl = pd.DataFrame({"DSP": dc.index, "Losses": dc.values, "Verdict": ["🎯 Well above average" if x > 1.5 else "✅ Normal" for x in z.values]})
-                tbl.index = range(1, len(tbl)+1); st.dataframe(tbl, use_container_width=True)
+                tbl.index = range(1, len(tbl)+1); st.dataframe(tbl, width="stretch")
                 if len(outliers) > 0:
                     st.error(f"🎯 {len(outliers)} DSP(s) losing much more than peers:")
                     for dsp, zv in outliers.items():
@@ -504,7 +504,7 @@ def render_analysis_tab(df, total, dr, kp=""):
                 exp = np.array([dt/7]*7); obs = np.array([dc2[d] for d in DAY_ORDER])
                 chi2d, pd2 = sp_stats.chisquare(obs, f_exp=exp)
                 tbl = pd.DataFrame({"Day": DAY_ORDER, "Losses": [int(dc2[d]) for d in DAY_ORDER], "Expected": [int(dt/7)]*7})
-                tbl.index = range(1, 8); st.dataframe(tbl, use_container_width=True)
+                tbl.index = range(1, 8); st.dataframe(tbl, width="stretch")
                 if pd2 < 0.05:
                     wd = dc2.idxmax(); wn = int(dc2.max())
                     st.error(f"🎯 **{wd}** is the worst day: {wn} losses vs ~{int(dt/7)} expected.")
@@ -526,7 +526,7 @@ def render_analysis_tab(df, total, dr, kp=""):
             stbl = df.groupby("Size Category").agg(Count=("Tracking ID", "count"), Cost=("Cost (£)", "sum")).sort_values("Count", ascending=False).reset_index()
             stbl["% of losses"] = (stbl["Count"] / total * 100).round(1)
             stbl["Cost"] = stbl["Cost"].apply(fmt_cost); stbl.index = range(1, len(stbl)+1)
-            st.dataframe(stbl, use_container_width=True)
+            st.dataframe(stbl, width="stretch")
             if ov_pct > 30:
                 st.error(f"🎯 Oversized = **{ov_pct}%** of losses (normal ~15-20%). Costing {fmt_cost(ov_cost)}.")
                 findings.append(f"Oversized parcels = {ov_pct}% of losses ({fmt_cost(ov_cost)})")
@@ -549,7 +549,7 @@ def render_analysis_tab(df, total, dr, kp=""):
                 repeat_df["Cost"] = repeat_df["Cost"].apply(fmt_cost)
                 repeat_df["Top Sub Bucket"] = [df[df["Aisle"]==a]["Sub Bucket"].value_counts().index[0] if len(df[df["Aisle"]==a]["Sub Bucket"].value_counts())>0 else "N/A" for a in repeat.index]
                 repeat_df.index = range(1, len(repeat_df)+1)
-                st.dataframe(repeat_df, use_container_width=True)
+                st.dataframe(repeat_df, width="stretch")
                 findings.append(f"Aisle {repeat.index[0]} lost {int(repeat.iloc[0])} parcels — repeat offender")
             else:
                 st.success("✅ No single aisle has 3+ losses.")
@@ -596,7 +596,7 @@ def render_analysis_tab(df, total, dr, kp=""):
             ]
             rows = []
             for keyword, stage in hp_order:
-                matching = sb_counts[sb_counts.index.str.contains(keyword, case=False, na=False)]
+                matching = sb_counts[sb_counts.index.str.contains(keyword, case=False, na=False, regex=False)]
                 if len(matching) > 0:
                     count = int(matching.sum())
                     pct = round(count / sb_total * 100, 1)
@@ -604,7 +604,7 @@ def render_analysis_tab(df, total, dr, kp=""):
                     rows.append({"Stage": keyword, "What happened": stage, "Count": count, "%": f"{pct}%", "Cost": fmt_cost(cost)})
             if rows:
                 hp_df = pd.DataFrame(rows); hp_df.index = range(1, len(hp_df)+1)
-                st.dataframe(hp_df, use_container_width=True)
+                st.dataframe(hp_df, width="stretch")
                 worst = max(rows, key=lambda r: r["Count"])
                 st.error(f"🎯 Most parcels leave the happy path at: **{worst['Stage']}** ({worst['Count']} parcels, {worst['%']})")
                 st.caption(f"What this means: {worst['What happened']}")
@@ -693,7 +693,7 @@ def render_trend_tab(df, total, dr, kp=""):
     ax2.set_title("Cost per Week", fontsize=9); ax2.tick_params(labelsize=7)
     plt.xticks(rotation=45); plt.tight_layout()
     st.pyplot(fig2)
-    st.dataframe(weekly.rename(columns={"YearWeek":"Week"}), use_container_width=True, hide_index=True)
+    st.dataframe(weekly.rename(columns={"YearWeek":"Week"}), width="stretch", hide_index=True)
 
 def render_day_tab(df, total, dr, kp=""):
     """Day of week tab with tracking ID drill-down."""
@@ -713,7 +713,7 @@ def render_day_tab(df, total, dr, kp=""):
             ax.set_ylabel("Lost", fontsize=8); ax.set_title(f"By Day ({dr})", fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout()
             st.pyplot(fig)
         else:
-            st.dataframe(make_table(dd, "Day", "Lost"), use_container_width=True)
+            st.dataframe(make_table(dd, "Day", "Lost"), width="stretch")
     with st.expander("🔍 Tracking IDs by Day"):
         day_sel = st.selectbox("Select day:", DAY_ORDER, key=f"{kp}day_sel")
         day_df = df[df["Day of Week"] == day_sel]
@@ -722,63 +722,64 @@ def render_day_tab(df, total, dr, kp=""):
             tid_cols = [c for c in ["Tracking ID","Sub Bucket","Type","Cluster","Aisle","DSP Name","Cost (£)","Loss Reason","Shift"] if c in day_df.columns]
             tid_df = day_df[tid_cols].reset_index(drop=True)
             tid_df.index = range(1, len(tid_df)+1)
-            st.dataframe(tid_df, use_container_width=True, height=400)
+            st.dataframe(tid_df, width="stretch", height=400)
             st.download_button(f"⬇️ Download {day_sel} parcels", tid_df.to_csv(index=False), f"{day_sel}_parcels.csv", "text/csv", key=f"{kp}dl_{day_sel}")
         else:
             st.info(f"No parcels marked lost on {day_sel}.")
 
 def render_export_tab(df, total, dr, kp="", station_name=""):
-    """Export tab — multi-tab Excel with separate sheets."""
+    """Export tab — multi-sheet download as ZIP of CSVs or single CSV."""
     st.markdown("#### 💾 Export All Processed Data")
-    st.caption("Download everything as a multi-tab Excel file (.xlsx). Each tab contains a different breakdown so you can analyse in Excel, R, or Python.")
+    st.caption("Download everything for further analysis in Excel, R, or Python.")
     
-    exp_mode = st.radio("Format:", ["📊 Multi-tab Excel (.xlsx)", "📄 Single CSV"], horizontal=True, key=f"{kp}exp_fmt")
+    exp_mode = st.radio("Format:", ["📊 Multi-file ZIP (separate tables)", "📄 Single CSV (all data)"], horizontal=True, key=f"{kp}exp_fmt")
     
-    if exp_mode == "📊 Multi-tab Excel (.xlsx)":
-        st.markdown("**Sheets included:**")
-        st.markdown("- **All Data** — every parcel with all processed columns\n"
-                    "- **By Location** — cluster/aisle breakdown with costs\n"
-                    "- **By Shift** — shift breakdown with costs\n"
-                    "- **By Day** — day of week breakdown\n"
-                    "- **By DSP** — DSP breakdown (OTR only)\n"
-                    "- **Loss Reasons** — all reasons ordered by cost")
+    if exp_mode == "📊 Multi-file ZIP (separate tables)":
+        st.markdown("""**Files included in ZIP:**
+- **All_Data.csv** — every parcel with all processed columns
+- **By_Location.csv** — cluster/aisle breakdown with costs
+- **By_Shift.csv** — shift breakdown with costs
+- **By_Day.csv** — day of week breakdown
+- **By_DSP.csv** — DSP breakdown (OTR only)
+- **Loss_Reasons.csv** — all reasons ordered by cost""")
         
+        import zipfile
         output = BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            # Sheet 1: All Data
+        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
+            # All Data
             exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","shipment_value"]
             clean_cols = [c for c in df.columns if c not in exc]
-            df[clean_cols].to_excel(writer, sheet_name="All Data", index=False)
+            zf.writestr("All_Data.csv", df[clean_cols].to_csv(index=False))
             
-            # Sheet 2: By Location
+            # By Location
             if df["Cluster"].dropna().count() > 0:
                 loc_df = df.groupby("Cluster").agg(Lost=("Tracking ID","count"), Cost=("Cost (£)","sum")).sort_values("Lost", ascending=False).reset_index()
-                loc_df.to_excel(writer, sheet_name="By Location", index=False)
+                zf.writestr("By_Location.csv", loc_df.to_csv(index=False))
             
-            # Sheet 3: By Shift
+            # By Shift
             shift_df = df[df["Shift"].isin(SHIFT_ORDER)].groupby("Shift").agg(Lost=("Tracking ID","count"), Cost=("Cost (£)","sum")).reindex(SHIFT_ORDER).reset_index()
-            shift_df.to_excel(writer, sheet_name="By Shift", index=False)
+            zf.writestr("By_Shift.csv", shift_df.to_csv(index=False))
             
-            # Sheet 4: By Day
+            # By Day
             if "Day of Week" in df.columns:
                 day_df = df.groupby("Day of Week").agg(Lost=("Tracking ID","count"), Cost=("Cost (£)","sum")).reindex(DAY_ORDER).reset_index()
-                day_df.to_excel(writer, sheet_name="By Day", index=False)
+                zf.writestr("By_Day.csv", day_df.to_csv(index=False))
             
-            # Sheet 5: By DSP
+            # By DSP
             dsp_data = df.dropna(subset=["DSP Name"])
             if len(dsp_data) > 0:
                 dsp_df = dsp_data.groupby("DSP Name").agg(Lost=("Tracking ID","count"), Cost=("Cost (£)","sum")).sort_values("Lost", ascending=False).reset_index()
-                dsp_df.to_excel(writer, sheet_name="By DSP", index=False)
+                zf.writestr("By_DSP.csv", dsp_df.to_csv(index=False))
             
-            # Sheet 6: Loss Reasons
+            # Loss Reasons
             lr_df = df.groupby("Loss Reason").agg(Count=("Tracking ID","count"), Cost=("Cost (£)","sum")).sort_values("Cost", ascending=False).reset_index()
             lr_df["% of Total"] = (lr_df["Count"] / total * 100).round(1)
-            lr_df.to_excel(writer, sheet_name="Loss Reasons", index=False)
+            zf.writestr("Loss_Reasons.csv", lr_df.to_csv(index=False))
         
         output.seek(0)
-        fname = f"{station_name}_Analysis.xlsx" if station_name else "Lost_Parcel_Analysis.xlsx"
-        st.download_button(f"⬇️ Download Excel ({fname})", output, fname, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key=f"{kp}dl_xlsx")
-        st.caption(f"{len(df)} parcels across 6 sheets")
+        fname = f"{station_name}_Analysis.zip" if station_name else "Lost_Parcel_Analysis.zip"
+        st.download_button(f"⬇️ Download ZIP ({fname})", output, fname, "application/zip", key=f"{kp}dl_zip")
+        st.caption(f"{len(df)} parcels across 6 files — open each CSV as a separate tab in Excel")
     
     else:
         clean_mode = st.radio("Columns:", ["Clean (no raw columns)", "Full (all columns for modelling)"], horizontal=True, key=f"{kp}exp_mode")
@@ -811,7 +812,8 @@ def render_export_tab(df, total, dr, kp="", station_name=""):
 | UTR Reason | More specific reason for station losses |
 | Longest Side | Max dimension in cm |
 """)
-    st.info("💡 **Tip:** Paste the exported data into R, Python, or Excel for more in-depth analysis, forecasting, and trend modelling.")
+    st.info("💡 **Tip:** Open the CSVs in Excel (each becomes a tab), or paste into R/Python for deeper modelling and forecasting.")
+
 
 def render_guide():
     """How to use — top-level guide with expandable sections."""
@@ -919,13 +921,13 @@ elif mode == "Single Station":
                 if len(cc)>0:
                     vm = st.radio("View:", ["Chart","Table + Cost"], horizontal=True, key="cv")
                     if vm=="Chart": st.pyplot(make_bar_horiz(cc, f"Clusters ({dr})"))
-                    else: st.dataframe(make_cost_table(df.dropna(subset=["Cluster"]), "Cluster"), use_container_width=True)
+                    else: st.dataframe(make_cost_table(df.dropna(subset=["Cluster"]), "Cluster"), width="stretch")
             with st.expander("🏷️ Sub Buckets"):
                 sb2 = df["Sub Bucket"].value_counts()
                 if len(sb2)>0:
                     vm = st.radio("View:", ["Chart","Table + Cost"], horizontal=True, key="sv")
                     if vm=="Chart": st.pyplot(make_bar_horiz(sb2, f"Sub Buckets ({dr})", color="teal"))
-                    else: st.dataframe(make_cost_table(df, "Sub Bucket"), use_container_width=True)
+                    else: st.dataframe(make_cost_table(df, "Sub Bucket"), width="stretch")
         with t2: render_locations_tab(df, total, dr, kp="s_")
         with t3: render_opportunities_tab(df, total, dr, kp="s_")
         with t4: render_cost_tab(df, total, dr, kp="s_")
