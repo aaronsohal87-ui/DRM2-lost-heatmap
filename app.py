@@ -711,44 +711,79 @@ Only the top 15 clusters (by loss count) are shown to keep it readable.
     st.caption("💡 Tip: Cross-reference this with the Shift Drill-Down to see the actual tracking IDs for that hotspot.")
 
 def render_trend_tab(df, total, dr, kp=""):
-    """Week-over-week trend — manual entry or multi-file upload."""
+    """Week-over-week trend — manual entry with sub-bucket breakdown."""
     st.markdown("#### 📈 Week-over-Week Trend")
     st.warning("⚠️ **Disclaimer:** Trends are only meaningful with enough data. "
                "Include at least 3-4 weeks for a reliable picture. "
-               "With only 2 weeks, the direction could just be normal variation. "
-               "The more weeks you add, the more confident you can be.")
+               "With only 2 weeks, the direction could just be normal variation.")
     st.caption("PerfectMile shows weekly data separately (L&U → Lost Focus). "
                "Enter the totals from each week below, or upload multiple weekly CSVs.")
     
-    trend_mode = st.radio("Input method:", ["📝 Enter weekly totals (quick)", "📂 Upload multiple weekly CSVs"], horizontal=True, key=f"{kp}tm")
+    trend_mode = st.radio("Input method:", ["📝 Enter weekly totals", "📂 Upload weekly CSVs"], horizontal=True, key=f"{kp}tm")
     
-    if trend_mode == "📝 Enter weekly totals (quick)":
-        st.markdown("**Enter your weekly Lost (Total) numbers from PerfectMile:**")
-        st.caption("Go to PerfectMile → L&U → Lost Focus → read the weekly totals (like W28: 405, W29: 406, etc.)")
+    if trend_mode == "📝 Enter weekly totals":
+        st.markdown("**Enter numbers from PerfectMile → L&U → Lost Focus (Weekly view):**")
         num_weeks = st.slider("How many weeks?", 2, 12, 4, key=f"{kp}nw")
+        
+        # Sub-bucket breakdown toggle
+        include_breakdown = st.checkbox("Include breakdown by loss type (PNOV, Inducted Not Stowed, etc.)", key=f"{kp}bd")
+        
+        # Define the common loss types users would track
+        loss_types = ["PNOV", "Inducted Not Stowed", "Stowed Not Picked Up", "UTR Reprocess", "Lost On Road"]
+        
         weeks_data = []
-        cols = st.columns(min(num_weeks, 4))
-        for i in range(num_weeks):
-            with cols[i % 4]:
-                wk_label = st.text_input(f"Week {i+1} label:", value=f"W{i+1}", key=f"{kp}wl{i}")
-                wk_count = st.number_input(f"Lost count:", min_value=0, value=0, step=1, key=f"{kp}wc{i}")
-                wk_cost = st.number_input(f"Cost (£, optional):", min_value=0.0, value=0.0, step=0.01, key=f"{kp}wco{i}")
-                if wk_count > 0:
-                    weeks_data.append({"Week": wk_label, "Losses": int(wk_count), "Cost": wk_cost})
+        
+        if not include_breakdown:
+            # Simple mode - just totals
+            cols = st.columns(min(num_weeks, 6))
+            for i in range(num_weeks):
+                with cols[i % 6]:
+                    wk_label = st.text_input(f"Week {i+1}:", value=f"W{i+1}", key=f"{kp}wl{i}")
+                    wk_count = st.number_input(f"Total lost:", min_value=0, value=0, step=1, key=f"{kp}wc{i}")
+                    if wk_count > 0:
+                        weeks_data.append({"Week": wk_label, "Total": int(wk_count)})
+        else:
+            # Detailed mode - totals + breakdown by type
+            st.markdown("---")
+            for i in range(num_weeks):
+                with st.expander(f"Week {i+1}", expanded=(i < 2)):
+                    wk_label = st.text_input(f"Label:", value=f"W{i+1}", key=f"{kp}wl{i}")
+                    c1, c2 = st.columns([1, 2])
+                    with c1:
+                        wk_total = st.number_input(f"Total lost:", min_value=0, value=0, step=1, key=f"{kp}wc{i}")
+                    with c2:
+                        st.caption("Breakdown (optional — leave 0 if unknown):")
+                    
+                    type_cols = st.columns(len(loss_types))
+                    type_values = {}
+                    for j, lt in enumerate(loss_types):
+                        with type_cols[j]:
+                            v = st.number_input(lt, min_value=0, value=0, step=1, key=f"{kp}lt{i}_{j}")
+                            type_values[lt] = v
+                    
+                    if wk_total > 0:
+                        row = {"Week": wk_label, "Total": int(wk_total)}
+                        for lt in loss_types:
+                            row[lt] = type_values[lt]
+                        weeks_data.append(row)
         
         if len(weeks_data) >= 2:
             weekly = pd.DataFrame(weeks_data)
-            _render_trend_charts(weekly, kp)
+            _render_trend_charts(weekly, loss_types if include_breakdown else None, kp)
         elif len(weeks_data) == 1:
             st.info("Enter at least 2 weeks to see a trend.")
         else:
-            st.info("👆 Enter weekly totals above. You can get these from PerfectMile → L&U → Lost Focus (Weekly view).")
+            st.info("👆 Enter weekly totals above from PerfectMile → L&U → Lost Focus.")
     
     else:
+        # Multi-file upload mode
         st.markdown("**Upload PM CSVs from different weeks:**")
-        st.caption("Download each week\'s CSV from PerfectMile separately, then upload them all here.")
-        num_files = st.slider("How many weeks?", 2, 8, 3, key=f"{kp}nf")
+        st.caption("Download each week\'s CSV from PerfectMile separately, then upload them here. "
+                   "The tool will auto-count totals and break down by sub-bucket.")
+        num_files = st.slider("How many weeks?", 2, 8, 4, key=f"{kp}nf")
         week_files = []
+        loss_types = ["PNOV", "Inducted Not Stowed", "Stowed Not Picked Up", "UTR Reprocess", "Lost On Road"]
+        
         for i in range(num_files):
             col1, col2 = st.columns([1, 3])
             with col1:
@@ -757,69 +792,132 @@ def render_trend_tab(df, total, dr, kp=""):
                 f_up = st.file_uploader(f"PM CSV ({wk_label}):", type="csv", key=f"{kp}fu{i}")
             if f_up:
                 wdf = pd.read_csv(f_up)
-                count = len(wdf)
-                cost = 0.0
-                if "shipment_value" in wdf.columns:
-                    cost = pd.to_numeric(wdf["shipment_value"].astype(str), errors="coerce").sum()
-                week_files.append({"Week": wk_label, "Losses": count, "Cost": cost})
+                row = {"Week": wk_label, "Total": len(wdf)}
+                # Auto-breakdown by sub_bucket
+                if "sub_bucket" in wdf.columns:
+                    sb = wdf["sub_bucket"].fillna("")
+                    row["PNOV"] = int(sb.str.contains("PNOV", case=False).sum())
+                    row["Inducted Not Stowed"] = int(sb.str.contains("Inducted Not Stowed", case=False).sum())
+                    row["Stowed Not Picked Up"] = int(sb.str.contains("Stowed Not Picked Up", case=False).sum())
+                    row["UTR Reprocess"] = int(sb.str.contains("UTR Reprocess", case=False).sum())
+                    row["Lost On Road"] = int(sb.str.contains("Lost On Road", case=False).sum())
+                week_files.append(row)
         
         if len(week_files) >= 2:
             weekly = pd.DataFrame(week_files)
-            _render_trend_charts(weekly, kp)
+            has_breakdown = any(weekly.get(lt, pd.Series(0)).sum() > 0 for lt in loss_types)
+            _render_trend_charts(weekly, loss_types if has_breakdown else None, kp)
         elif len(week_files) == 1:
             st.info("Upload at least 2 weeks to see a trend.")
         else:
             st.info("👆 Upload PM CSVs from different weeks above.")
 
-def _render_trend_charts(weekly, kp=""):
-    """Render trend charts from a weekly DataFrame with Week, Losses, Cost columns."""
+def _render_trend_charts(weekly, loss_types=None, kp=""):
+    """Render trend charts from weekly DataFrame."""
     st.markdown("---")
-    st.markdown("##### 📈 Trend")
     
+    # ─── MAIN TREND LINE ──────────────────────────────────────────────────
+    st.markdown("##### 📈 Overall Trend")
     fig, ax = plt.subplots(figsize=(7, 3))
-    ax.plot(weekly["Week"], weekly["Losses"], marker="o", color="steelblue", linewidth=2)
+    ax.plot(weekly["Week"], weekly["Total"], marker="o", color="steelblue", linewidth=2, label="Total Lost")
     for i, row in weekly.iterrows():
-        ax.annotate(str(int(row["Losses"])), xy=(row["Week"], row["Losses"]), xytext=(0, 8), textcoords="offset points", ha="center", fontsize=8)
+        ax.annotate(str(int(row["Total"])), xy=(row["Week"], row["Total"]), xytext=(0, 8), textcoords="offset points", ha="center", fontsize=8)
+    # Average line
+    avg = weekly["Total"].mean()
+    ax.axhline(y=avg, color="gray", linestyle="--", linewidth=1, alpha=0.7)
+    ax.text(len(weekly)-1, avg+2, f"avg: {avg:.0f}", fontsize=7, color="gray")
     ax.set_xlabel("Week", fontsize=8); ax.set_ylabel("Losses", fontsize=8)
     ax.set_title("Lost Parcels per Week", fontsize=9); ax.tick_params(labelsize=7)
     plt.xticks(rotation=45); plt.tight_layout()
     st.pyplot(fig)
     
-    # Trend direction
-    first_w = int(weekly.iloc[0]["Losses"]); last_w = int(weekly.iloc[-1]["Losses"])
+    # Trend verdict
+    first_w = int(weekly.iloc[0]["Total"]); last_w = int(weekly.iloc[-1]["Total"])
     if first_w > 0:
         pct_change = round((last_w - first_w) / first_w * 100, 1)
     else:
         pct_change = 0
     
     if last_w < first_w * 0.8:
-        st.success(f"📉 **Improving!** Down from {first_w} to {last_w} ({pct_change:+.1f}%)")
+        st.success(f"📉 **Improving!** {first_w} → {last_w} ({pct_change:+.1f}%)")
     elif last_w > first_w * 1.2:
-        st.error(f"📈 **Getting worse.** Up from {first_w} to {last_w} ({pct_change:+.1f}%)")
+        st.error(f"📈 **Getting worse.** {first_w} → {last_w} ({pct_change:+.1f}%)")
     else:
         st.info(f"➡️ **Stable.** {first_w} → {last_w} ({pct_change:+.1f}%, within ±20%)")
     
-    # Cost chart if available
-    if weekly["Cost"].sum() > 0:
-        fig2, ax2 = plt.subplots(figsize=(7, 2.5))
-        ax2.bar(weekly["Week"], weekly["Cost"], color="teal")
-        for i, row in weekly.iterrows():
-            ax2.text(row["Week"], row["Cost"]+0.5, fmt_cost(row["Cost"]), ha="center", fontsize=6)
-        ax2.set_xlabel("Week", fontsize=8); ax2.set_ylabel("£", fontsize=8)
-        ax2.set_title("Cost per Week", fontsize=9); ax2.tick_params(labelsize=7)
-        plt.xticks(rotation=45); plt.tight_layout()
-        st.pyplot(fig2)
+    # ─── SUMMARY STATS ────────────────────────────────────────────────────
+    with st.expander("📊 Summary Statistics"):
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Average/week", f"{avg:.0f}")
+        col2.metric("Best week", f"{int(weekly['Total'].min())} ({weekly.loc[weekly['Total'].idxmin(), 'Week']})")
+        col3.metric("Worst week", f"{int(weekly['Total'].max())} ({weekly.loc[weekly['Total'].idxmax(), 'Week']})")
+        std = weekly["Total"].std()
+        col4.metric("Volatility (σ)", f"±{std:.0f}")
+        st.caption("Low volatility = consistent performance. High volatility = unpredictable — investigate what changed in the worst weeks.")
     
-    # Summary table
-    display = weekly.copy()
-    if display["Cost"].sum() > 0:
-        display["Cost"] = display["Cost"].apply(fmt_cost)
-    else:
-        display = display.drop(columns=["Cost"])
-    display.index = range(1, len(display)+1)
-    st.dataframe(display, width="stretch", hide_index=True)
+    # ─── BREAKDOWN BY LOSS TYPE ────────────────────────────────────────────
+    if loss_types:
+        has_data = [lt for lt in loss_types if lt in weekly.columns and weekly[lt].sum() > 0]
+        if has_data:
+            st.markdown("---")
+            st.markdown("##### 📊 Trend by Loss Type")
+            st.caption("Select which loss types to overlay on the chart. Compare how different categories are trending.")
+            
+            selected_types = st.multiselect("Show on chart:", has_data, default=has_data[:3], key=f"{kp}lt_sel")
+            
+            if selected_types:
+                colors = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6"]
+                fig2, ax2 = plt.subplots(figsize=(7, 3.5))
+                for idx, lt in enumerate(selected_types):
+                    c = colors[idx % len(colors)]
+                    ax2.plot(weekly["Week"], weekly[lt], marker="o", linewidth=1.5, label=lt, color=c)
+                    for i, row in weekly.iterrows():
+                        if row[lt] > 0:
+                            ax2.annotate(str(int(row[lt])), xy=(row["Week"], row[lt]), xytext=(0, 6), textcoords="offset points", ha="center", fontsize=6, color=c)
+                ax2.set_xlabel("Week", fontsize=8); ax2.set_ylabel("Losses", fontsize=8)
+                ax2.set_title("Loss Types Over Time", fontsize=9); ax2.tick_params(labelsize=7)
+                ax2.legend(fontsize=7, loc="upper right")
+                plt.xticks(rotation=45); plt.tight_layout()
+                st.pyplot(fig2)
+            
+            # Breakdown table
+            with st.expander("📋 Full breakdown table"):
+                display_cols = ["Week", "Total"] + has_data
+                disp = weekly[display_cols].copy()
+                disp["Other"] = disp["Total"] - disp[has_data].sum(axis=1)
+                disp["Other"] = disp["Other"].clip(lower=0)
+                disp.index = range(1, len(disp)+1)
+                st.dataframe(disp, width="stretch", hide_index=True)
+            
+            # Individual type trends
+            with st.expander("📈 Individual type verdicts"):
+                for lt in has_data:
+                    first_lt = int(weekly.iloc[0][lt]); last_lt = int(weekly.iloc[-1][lt])
+                    if first_lt > 0:
+                        pct = round((last_lt - first_lt) / first_lt * 100, 1)
+                        if pct <= -20:
+                            st.markdown(f"- 📉 **{lt}:** {first_lt} → {last_lt} ({pct:+.1f}%) — improving")
+                        elif pct >= 20:
+                            st.markdown(f"- 📈 **{lt}:** {first_lt} → {last_lt} ({pct:+.1f}%) — getting worse")
+                        else:
+                            st.markdown(f"- ➡️ **{lt}:** {first_lt} → {last_lt} ({pct:+.1f}%) — stable")
+                    elif last_lt > 0:
+                        st.markdown(f"- 🆕 **{lt}:** 0 → {last_lt} (new this period)")
+                    else:
+                        st.markdown(f"- ✅ **{lt}:** 0 → 0 (none recorded)")
     
-    # Download
+    # ─── WEEK-OVER-WEEK CHANGE TABLE ──────────────────────────────────────
+    with st.expander("📉 Week-over-week change"):
+        if len(weekly) >= 2:
+            wow = weekly[["Week", "Total"]].copy()
+            wow["Change"] = wow["Total"].diff()
+            wow["% Change"] = wow["Total"].pct_change().multiply(100).round(1)
+            wow["Direction"] = wow["Change"].apply(lambda x: "📉 Down" if x < 0 else ("📈 Up" if x > 0 else "➡️ Same") if pd.notna(x) else "—")
+            wow = wow.fillna("—")
+            wow.index = range(1, len(wow)+1)
+            st.dataframe(wow, width="stretch", hide_index=True)
+    
+    # ─── DOWNLOAD ─────────────────────────────────────────────────────────
     st.download_button("⬇️ Download trend data", weekly.to_csv(index=False), "weekly_trend.csv", "text/csv", key=f"{kp}dl_trend")
 
 
