@@ -750,17 +750,26 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
             num_weeks = st.slider("How many weeks?", 1, 12, 4, key=f"{kp}nw")
             include_sb = st.checkbox("Include sub-bucket breakdown", key=f"{kp}inc_sb")
             weeks_data = []
-            SUB_BUCKETS_INPUT = ["Lost At Station", "Lost On Road", "Lost Between Stations", "Other Lost"]
+            # Get sub-bucket names from the actual uploaded data
+            sb_names = sorted(df["Sub Bucket"].dropna().unique().tolist()) if "Sub Bucket" in df.columns else []
+            if not sb_names:
+                sb_names = ["Lost At Station - Inducted Not Stowed", "Lost At Station - Stowed Not Picked Up",
+                            "Lost At Station - Debrief Receive(RTS)", "Lost On Road - No Further Status",
+                            "Lost On Road - Attempted", "Lost On Road - Damage"]
             for i in range(num_weeks):
                 with st.expander(f"Week {i+1}", expanded=(i < 2)):
                     wk_label = st.text_input(f"Label:", value=f"W{i+1}", key=f"{kp}wl{i}")
                     wk_count = st.number_input(f"Total lost:", min_value=0, value=0, step=1, key=f"{kp}wc{i}")
                     row = {"Week": wk_label, "Total": int(wk_count)}
-                    if include_sb and wk_count > 0:
-                        sb_cols = st.columns(len(SUB_BUCKETS_INPUT))
-                        for j, sb_name in enumerate(SUB_BUCKETS_INPUT):
-                            with sb_cols[j]:
-                                row[sb_name] = st.number_input(sb_name, min_value=0, value=0, step=1, key=f"{kp}sb{i}_{j}")
+                    if include_sb:
+                        st.caption("Sub-bucket breakdown (optional — leave 0 if unknown):")
+                        # Show in rows of 3 for readability
+                        for j in range(0, len(sb_names), 3):
+                            sb_row = sb_names[j:j+3]
+                            sb_cols = st.columns(len(sb_row))
+                            for k, sb_name in enumerate(sb_row):
+                                with sb_cols[k]:
+                                    row[sb_name] = st.number_input(sb_name, min_value=0, value=0, step=1, key=f"{kp}sb{i}_{j+k}")
                     if wk_count > 0:
                         weeks_data.append(row)
             _render_trend_chart(weeks_data, kp)
@@ -828,11 +837,18 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
                             row = {"Week": wk_label, "Total": int(wk_count)}
                             sb_exp = st.checkbox("Add sub-bucket breakdown", key=f"{kp}mx_sb_{i}")
                             if sb_exp:
-                                SB_MIX = ["Lost At Station", "Lost On Road", "Lost Between Stations", "Other Lost"]
-                                sb_cols = st.columns(4)
-                                for j, sbn in enumerate(SB_MIX):
-                                    with sb_cols[j]:
-                                        row[sbn] = st.number_input(sbn, min_value=0, value=0, step=1, key=f"{kp}mx_sb_{i}_{j}")
+                                sb_names_mix = sorted(df["Sub Bucket"].dropna().unique().tolist()) if "Sub Bucket" in df.columns else []
+                                if not sb_names_mix:
+                                    sb_names_mix = ["Lost At Station - Inducted Not Stowed", "Lost At Station - Stowed Not Picked Up",
+                                                    "Lost At Station - Debrief Receive(RTS)", "Lost On Road - No Further Status",
+                                                    "Lost On Road - Attempted", "Lost On Road - Damage"]
+                                st.caption("Sub-bucket breakdown:")
+                                for j in range(0, len(sb_names_mix), 3):
+                                    sb_row = sb_names_mix[j:j+3]
+                                    sb_cols = st.columns(len(sb_row))
+                                    for k, sbn in enumerate(sb_row):
+                                        with sb_cols[k]:
+                                            row[sbn] = st.number_input(sbn, min_value=0, value=0, step=1, key=f"{kp}mx_sb_{i}_{j+k}")
                             weeks_data.append(row)
                     else:
                         f_up = st.file_uploader("PM CSV:", type="csv", key=f"{kp}mfu{i}")
