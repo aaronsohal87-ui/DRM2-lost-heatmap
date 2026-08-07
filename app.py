@@ -744,7 +744,7 @@ def render_export_tab(df, total, dr, kp="", station_name=""):
                     "- **Loss Reasons** — all reasons ordered by cost")
         
         output = BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
             # Sheet 1: All Data
             exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","shipment_value"]
             clean_cols = [c for c in df.columns if c not in exc]
