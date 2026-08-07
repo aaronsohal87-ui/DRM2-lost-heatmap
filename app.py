@@ -717,13 +717,13 @@ def render_trend_tab(df, total, dr, kp=""):
                "Include at least 3-4 weeks for a reliable picture. "
                "With only 2 weeks, the direction could just be normal variation.")
     st.caption("PerfectMile shows weekly data separately (L&U → Lost Focus). "
-               "Enter the totals from each week below, or upload multiple weekly CSVs.")
+               "Enter totals manually, or upload your weekly PM CSVs (recommended — auto-detects breakdown).")
     
     trend_mode = st.radio("Input method:", ["📝 Enter weekly totals", "📂 Upload weekly CSVs"], horizontal=True, key=f"{kp}tm")
     
     if trend_mode == "📝 Enter weekly totals":
         st.markdown("**Enter numbers from PerfectMile → L&U → Lost Focus (Weekly view):**")
-        num_weeks = st.slider("How many weeks?", 2, 12, 4, key=f"{kp}nw")
+        num_weeks = st.slider("How many weeks?", 1, 12, 4, key=f"{kp}nw")
         
         # Sub-bucket breakdown toggle
         include_breakdown = st.checkbox("Include breakdown by loss type (PNOV, Inducted Not Stowed, etc.)", key=f"{kp}bd")
@@ -771,7 +771,9 @@ def render_trend_tab(df, total, dr, kp=""):
             weekly = pd.DataFrame(weeks_data)
             _render_trend_charts(weekly, loss_types if include_breakdown else None, kp)
         elif len(weeks_data) == 1:
-            st.info("Enter at least 2 weeks to see a trend.")
+            st.info("Enter 1 more week to compare. Single week shown below.")
+            weekly = pd.DataFrame(weeks_data)
+            st.metric("This week", f"{int(weekly.iloc[0]['Total'])} lost")
         else:
             st.info("👆 Enter weekly totals above from PerfectMile → L&U → Lost Focus.")
     
@@ -780,7 +782,7 @@ def render_trend_tab(df, total, dr, kp=""):
         st.markdown("**Upload PM CSVs from different weeks:**")
         st.caption("Download each week\'s CSV from PerfectMile separately, then upload them here. "
                    "The tool will auto-count totals and break down by sub-bucket.")
-        num_files = st.slider("How many weeks?", 2, 8, 4, key=f"{kp}nf")
+        num_files = st.slider("How many weeks?", 1, 8, 4, key=f"{kp}nf")
         week_files = []
         loss_types = ["PNOV", "Inducted Not Stowed", "Stowed Not Picked Up", "UTR Reprocess", "Lost On Road"]
         
@@ -808,7 +810,14 @@ def render_trend_tab(df, total, dr, kp=""):
             has_breakdown = any(weekly.get(lt, pd.Series(0)).sum() > 0 for lt in loss_types)
             _render_trend_charts(weekly, loss_types if has_breakdown else None, kp)
         elif len(week_files) == 1:
-            st.info("Upload at least 2 weeks to see a trend.")
+            st.info("Upload 1 more week to see a trend comparison. Single week data shown below.")
+            weekly = pd.DataFrame(week_files)
+            st.metric("This week", f"{int(weekly.iloc[0]['Total'])} lost")
+            has_breakdown = any(weekly.get(lt, pd.Series(0)).sum() > 0 for lt in loss_types)
+            if has_breakdown:
+                bd_cols = [lt for lt in loss_types if lt in weekly.columns and weekly[lt].sum() > 0]
+                if bd_cols:
+                    st.dataframe(weekly[["Week", "Total"] + bd_cols], width="stretch", hide_index=True)
         else:
             st.info("👆 Upload PM CSVs from different weeks above.")
 
