@@ -13,8 +13,14 @@ STATION_COLORS = ["steelblue", "orange", "green", "red", "purple"]
 DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 SHIFT_ORDER = ["NS", "AM", "PM", "OTR"]
 SHIFT_COLORS = {"NS": "midnightblue", "AM": "darkorange", "PM": "darkgreen", "OTR": "firebrick"}
-SHIFT_DEFINITIONS = {"NS": "00:00 – 09:59 (Night Sort — stow)", "AM": "10:00 – 13:59 (Pick, stage, dispatch)", "PM": "14:00 – 23:59 (Dispatch, RELO)", "OTR": "On The Road (DSP responsibility)"}
-SHIFT_HOUR_MAP = {0:"NS",1:"NS",2:"NS",3:"NS",4:"NS",5:"NS",6:"NS",7:"NS",8:"NS",9:"NS",10:"AM",11:"AM",12:"AM",13:"AM",14:"PM",15:"PM",16:"PM",17:"PM",18:"PM",19:"PM",20:"PM",21:"PM",22:"PM",23:"PM"}
+SHIFT_DEFINITIONS = {"NS": "23:45 – 09:45 (Night Sort — stow)", "AM": "09:45 – 14:00 (Pick, stage, dispatch)", "PM": "14:00 – 23:45 (Dispatch, RELO)", "OTR": "On The Road (DSP responsibility)"}
+
+# Updated shift hour map for new timings: NS=23:45-9:45, AM=9:45-14:00, PM=14:00-23:45
+# Hour 0-9 = NS (continuing from previous night), Hour 10-13 = AM, Hour 14-23 = PM
+# Note: The 9:45 boundary means hour 9 is mostly NS, hour 10 starts AM territory
+# Hour 23 is the start of NS (23:45 onward)
+SHIFT_HOUR_MAP = {0:"NS",1:"NS",2:"NS",3:"NS",4:"NS",5:"NS",6:"NS",7:"NS",8:"NS",9:"NS",10:"AM",11:"AM",12:"AM",13:"AM",14:"PM",15:"PM",16:"PM",17:"PM",18:"PM",19:"PM",20:"PM",21:"PM",22:"PM",23:"NS"}
+
 SUB_BUCKET_SHIFT_MAP = {"Lost At Station - Inducted Not Stowed":"NS","Lost At Station - Stowed Not Picked Up":"AM","Lost At Station - Debrief Receive(RTS)":"PM","Lost On Road - Attempted":"OTR","Lost On Road - Damage":"OTR","Lost On Road - No Further Status":"OTR"}
 SENSITIVE_COLS = ["Holder Name","Ordering Order ID","Order Amount","Receivable Amount","Payment Method","District","Scheduled Delivery End Time"]
 REQUIRED_SCC_COLS = ["Tracking ID","Sort Zone","Aisle","Cluster","Package Length","Package Width","Package Height","DSP Name","Assigned Cycle","Last Updated Time"]
@@ -23,16 +29,40 @@ CHART = (7, 2.5)
 DSP_MAX = 20
 LABEL_MAX = 25
 
+# Amazon UK FBA Size Tiers (based on longest side of packaged item)
+# Small Envelope: ≤ 20cm longest side
+# Standard Envelope / Large Envelope: ≤ 33cm longest side
+# Standard Parcel: ≤ 45cm longest side
+# Small Oversize: ≤ 61cm longest side
+# Standard Oversize: ≤ 120cm longest side
+# Large Oversize: > 120cm longest side
+SIZE_TIER_INFO = """
+| Size Tier | Longest Side | Amazon Classification |
+|-----------|-------------|----------------------|
+| Small Envelope | ≤ 20 cm | Thin, flat items (phone cases, etc.) |
+| Standard Envelope | ≤ 33 cm | Books, small items |
+| Standard Parcel | ≤ 45 cm | Most consumer goods |
+| Small Oversize | ≤ 61 cm | Larger boxed items |
+| Standard Oversize | ≤ 120 cm | Furniture, large appliances |
+| Large Oversize | > 120 cm | Very large items |
+"""
+
 # ─── CORE FUNCTIONS ───────────────────────────────────────────────────────────
 def get_size(val):
+    """Amazon UK FBA size tier based on longest side (cm)."""
     if pd.isna(val): return "Unknown"
-    if val <= 35: return "Small"
-    if val <= 45: return "Medium"
+    if val <= 20: return "Small Envelope"
+    if val <= 33: return "Standard Envelope"
+    if val <= 45: return "Standard Parcel"
     if val <= 61: return "Small Oversize"
+    if val <= 120: return "Standard Oversize"
     return "Large Oversize"
+
 def hour_to_shift(hour):
+    """Convert hour to shift using updated DRM2 shift windows."""
     if pd.isna(hour): return "Unknown"
     return SHIFT_HOUR_MAP.get(int(hour), "Unknown")
+
 def assign_shift(row):
     sb = row.get("Sub Bucket", "")
     if sb in SUB_BUCKET_SHIFT_MAP: return SUB_BUCKET_SHIFT_MAP[sb]
@@ -47,11 +77,25 @@ def assign_shift(row):
         if "PM" in u or "RELO" in u or "C2" in u: return "PM"
         if "AM" in u or "C1" in u: return "AM"
     return "Unknown"
+
 def classify_otr_utr(sub_bucket):
     if pd.isna(sub_bucket): return "Unknown"
     if "Lost On Road" in str(sub_bucket): return "OTR"
     if "Lost At Station" in str(sub_bucket): return "UTR"
     return "Unknown"
+
+def is_flex_driver(dsp_name):
+    """Identify Flex drivers — CSP_COMPANY_NAME indicates a Flex driver."""
+    if pd.isna(dsp_name): return False
+    return "CSP_COMPANY_NAME" in str(dsp_name).upper()
+
+def clean_dsp_name(dsp_name):
+    """Clean DSP name — mark Flex drivers clearly."""
+    if pd.isna(dsp_name): return dsp_name
+    if is_flex_driver(dsp_name):
+        return "FLEX DRIVER"
+    return str(dsp_name).strip()
+
 def clean_scc(df):
     df = df.drop(columns=[c for c in SENSITIVE_COLS if c in df.columns])
     df = df.drop(columns=[c for c in ["Last Scan By","Driver Id"] if c in df.columns])
@@ -65,7 +109,11 @@ def clean_scc(df):
     if "Dispatch Time" in df.columns: df["Dispatch Time"] = pd.to_datetime(df["Dispatch Time"], dayfirst=True, errors="coerce")
     if "Province" in df.columns: df["Province"] = df["Province"].astype(str).str.strip().str.title().replace("Nan", pd.NA)
     if "City" in df.columns: df["City"] = df["City"].astype(str).str.strip().str.title().replace("Nan", pd.NA)
+    # Clean DSP names — identify Flex drivers
+    if "DSP Name" in df.columns:
+        df["DSP Name"] = df["DSP Name"].apply(clean_dsp_name)
     return df
+
 def merge_data(pm_df, scc_df):
     scc_clean = clean_scc(scc_df.copy())
     pm_keep = ["tracking_id","bucket","sub_bucket","previous_event_datetime","previous_reason","previous_reason_3","event_datetime","shipment_value"]
@@ -85,9 +133,12 @@ def merge_data(pm_df, scc_df):
     if "previous_reason_3" in merged.columns: merged["UTR Reason"] = merged["previous_reason_3"].replace({"NOREASON":"No Reason","NONE":"No Reason"}).fillna("Unknown")
     else: merged["UTR Reason"] = "Unknown"
     merged["Shift"] = merged.apply(assign_shift, axis=1)
+    # Identify Flex vs DSP
+    merged["Driver Type"] = merged["DSP Name"].apply(lambda x: "Flex" if x == "FLEX DRIVER" else ("DSP" if pd.notna(x) else "Unknown"))
     for col in ["Cluster","Aisle","Sort Zone","DSP Name","Size Category","City","Province","Postal","Cost (£)"]:
         if col not in merged.columns: merged[col] = None
     return merged
+
 def get_date_range(df):
     for col in ["Marked Lost DT","Dispatch Time","Last Updated Time"]:
         if col in df.columns:
@@ -161,7 +212,7 @@ def render_health_score(df, total):
                 elif outliers_n == 1: score -= 1; reasons.append("1 DSP outlier")
     sc3 = df["Size Category"].value_counts()
     if len(sc3) >= 2:
-        ov = sc3.get("Small Oversize", 0) + sc3.get("Large Oversize", 0)
+        ov = sum(sc3.get(k, 0) for k in ["Small Oversize", "Standard Oversize", "Large Oversize"])
         if ov / total > 0.3: score -= 1; reasons.append("Oversize elevated")
     score = max(1, min(10, score))
     if score >= 8: color = "🟢"; label = "Good"
@@ -187,6 +238,7 @@ def render_missing_parcels(df, total, matched):
                 sel = st.selectbox("Parcel:", mdf["Tracking ID"].tolist(), key="miss")
                 r = mdf[mdf["Tracking ID"]==sel].iloc[0]
                 st.markdown(f"**TID:** {sel} | **Sub Bucket:** {r.get('Sub Bucket','N/A')} | **Type:** {r.get('Type','N/A')} | **Shift:** {r.get('Shift','N/A')} | **Cost:** {fmt_cost(r.get('Cost (£)'))}")
+
 
 def render_locations_tab(df, total, dr, kp=""):
     verify_totals(df, total, "Locations")
@@ -252,6 +304,15 @@ def render_locations_tab(df, total, dr, kp=""):
 def render_opportunities_tab(df, total, dr, kp=""):
     with st.expander("📖 How shift & lost date are assigned"):
         st.markdown("""
+**Shift Windows (DRM2):**
+
+| Shift | Window | Responsibility |
+|-------|--------|----------------|
+| NS | 23:45 – 09:45 | Night Sort — stow |
+| AM | 09:45 – 14:00 | Pick, stage, dispatch |
+| PM | 14:00 – 23:45 | Dispatch, RELO |
+| OTR | N/A | On The Road (DSP/Flex) |
+
 **How is the shift assigned?**
 
 | If the parcel has... | Shift = |
@@ -264,9 +325,7 @@ def render_opportunities_tab(df, total, dr, kp=""):
 
 **How is the "lost date" determined?**
 
-The date shown is when **Perfect Mile marked the parcel as lost** (`event_datetime`). This is the timestamp when the system flagged it — NOT necessarily when it physically went missing. A parcel that went missing on Friday night might only be flagged lost on Monday when the system times out waiting for a scan.
-
-The time of the last scan before it was lost (`previous_event_datetime`) is what determines the shift assignment for non-obvious sub-buckets.
+The date shown is when **Perfect Mile marked the parcel as lost** (`event_datetime`). This is the timestamp when the system flagged it — NOT necessarily when it physically went missing.
 """)
     sc = df[df["Shift"]!="Unknown"]["Shift"].value_counts(); unk = len(df[df["Shift"]=="Unknown"])
     with st.expander("🏆 Shift Opportunity Leaderboard"):
@@ -283,7 +342,6 @@ The time of the last scan before it was lost (`previous_event_datetime`) is what
         sdf = df[df["Shift"]==ss]
         if len(sdf)>0:
             st.write(f"**{ss}: {len(sdf)} parcels** — {fmt_cost(sdf['Cost (£)'].sum())}")
-            # Filter by reason
             reasons_available = ["All"] + sorted(sdf["Loss Reason"].dropna().unique().tolist())
             reason_filter = st.selectbox("Filter by reason:", reasons_available, key=f"{kp}rf")
             if reason_filter != "All":
@@ -294,15 +352,103 @@ The time of the last scan before it was lost (`previous_event_datetime`) is what
             if vm=="Sub Buckets":
                 st.dataframe(make_table(sbc,"Sub Bucket","Count"),width="stretch")
             else:
-                tid_cols = [c for c in ["Tracking ID","Marked Lost DT","Sub Bucket","Type","Cluster","Aisle","DSP Name","Cost (£)","Loss Reason","Day of Week"] if c in sdf.columns]
+                tid_cols = [c for c in ["Tracking ID","Marked Lost DT","Sub Bucket","Type","Cluster","Aisle","DSP Name","Cost (£)","Loss Reason"] if c in sdf.columns]
                 tid_df = sdf[tid_cols].copy()
-                # Sort by date (most recent first)
                 if "Marked Lost DT" in tid_df.columns:
                     tid_df = tid_df.sort_values("Marked Lost DT", ascending=True, na_position="last")
                 tid_df = tid_df.reset_index(drop=True)
                 tid_df.index = range(1, len(tid_df)+1)
                 st.dataframe(tid_df, width="stretch", height=400)
                 st.download_button(f"⬇️ Download {ss} parcels", tid_df.to_csv(index=False), f"{ss}_parcels.csv", "text/csv", key=f"{kp}dl_{ss}")
+
+
+def render_pnov_tab(df, total, dr, kp=""):
+    """PNOV (Package Not On Vehicle) tab — shows PNOV parcels and responsible associates/DSPs."""
+    st.markdown("#### 📦 PNOV — Package Not On Vehicle")
+    st.caption("PNOV parcels were dispatched but never confirmed delivered or returned. "
+               "This tab identifies which DSPs/Flex drivers and clusters are associated with PNOV losses.")
+
+    # Filter to PNOV sub-bucket
+    pnov_keywords = ["PNOV", "No Further Status", "Package Not On Vehicle"]
+    pnov_mask = df["Sub Bucket"].fillna("").apply(lambda x: any(k.lower() in x.lower() for k in pnov_keywords))
+    pnov_df = df[pnov_mask].copy()
+
+    if len(pnov_df) == 0:
+        st.info("No PNOV parcels found in this dataset. PNOV parcels have sub-bucket containing 'No Further Status' or 'PNOV'.")
+        return
+
+    st.markdown(f"**{len(pnov_df)} PNOV parcels** — {fmt_cost(pnov_df['Cost (£)'].sum())} ({round(len(pnov_df)/total*100,1)}% of all losses)")
+
+    # Summary metrics
+    c1, c2, c3 = st.columns(3)
+    flex_count = len(pnov_df[pnov_df["Driver Type"] == "Flex"])
+    dsp_count = len(pnov_df[pnov_df["Driver Type"] == "DSP"])
+    c1.metric("Flex Drivers", flex_count)
+    c2.metric("DSP Drivers", dsp_count)
+    c3.metric("Avg Cost/Parcel", fmt_cost(pnov_df["Cost (£)"].mean()))
+
+    # Responsible DSPs/Flex
+    with st.expander("🚚 Responsible Drivers (DSP + Flex)", expanded=True):
+        dsp_data = pnov_df.dropna(subset=["DSP Name"])
+        if len(dsp_data) > 0:
+            dc = dsp_data["DSP Name"].value_counts()
+            vm = st.radio("View:", ["Chart", "Table + Cost"], horizontal=True, key=f"{kp}pnov_dsp_v")
+            if vm == "Chart":
+                st.pyplot(make_bar_horiz(dc, f"PNOV by Driver ({dr})", color="firebrick", max_label=DSP_MAX))
+            else:
+                tbl = dsp_data.groupby("DSP Name").agg(
+                    PNOV_Count=("Tracking ID", "count"),
+                    Cost=("Cost (£)", "sum"),
+                    Driver_Type=("Driver Type", "first")
+                ).sort_values("PNOV_Count", ascending=False).reset_index()
+                tbl["Cost"] = tbl["Cost"].apply(fmt_cost)
+                tbl.index = range(1, len(tbl)+1)
+                st.dataframe(tbl, width="stretch")
+
+            # Flex vs DSP split
+            st.markdown("---")
+            st.markdown("**Flex vs DSP PNOV Split:**")
+            type_counts = dsp_data["Driver Type"].value_counts()
+            if len(type_counts) > 0:
+                fig, ax = plt.subplots(figsize=(3, 1.5))
+                colors_map = {"Flex": "#e74c3c", "DSP": "#3498db", "Unknown": "#95a5a6"}
+                ax.bar(type_counts.index, type_counts.values, color=[colors_map.get(x, "gray") for x in type_counts.index])
+                for i, v in enumerate(type_counts.values): ax.text(i, v+0.2, str(int(v)), ha="center", fontsize=8)
+                ax.set_ylabel("PNOV Count", fontsize=8); ax.set_title("PNOV: Flex vs DSP", fontsize=9)
+                ax.tick_params(labelsize=7); plt.tight_layout()
+                st.pyplot(fig)
+        else:
+            st.warning("No DSP/driver data available for PNOV parcels.")
+
+    # By Cluster (where they were dispatched from)
+    with st.expander("📍 PNOV by Dispatch Cluster"):
+        cl = pnov_df["Cluster"].dropna().value_counts()
+        if len(cl) > 0:
+            vm = st.radio("View:", ["Chart", "Table"], horizontal=True, key=f"{kp}pnov_cl_v")
+            if vm == "Chart":
+                st.pyplot(make_bar_horiz(cl.head(15), f"PNOV by Cluster ({dr})", color="purple"))
+            else:
+                st.dataframe(make_table(cl, "Cluster", "PNOV Count"), width="stretch")
+        else:
+            st.info("No cluster data for PNOV parcels.")
+
+    # Loss reasons for PNOV
+    with st.expander("❓ PNOV Loss Reasons"):
+        lr = pnov_df["Loss Reason"].dropna().value_counts()
+        if len(lr) > 0:
+            st.dataframe(make_table(lr, "Reason", "Count"), width="stretch")
+
+    # All PNOV tracking IDs
+    with st.expander("📋 All PNOV Tracking IDs"):
+        tid_cols = [c for c in ["Tracking ID","Marked Lost DT","Cluster","Aisle","DSP Name","Driver Type","Cost (£)","Loss Reason"] if c in pnov_df.columns]
+        tid_df = pnov_df[tid_cols].copy()
+        if "Marked Lost DT" in tid_df.columns:
+            tid_df = tid_df.sort_values("Marked Lost DT", ascending=True, na_position="last")
+        tid_df = tid_df.reset_index(drop=True)
+        tid_df.index = range(1, len(tid_df)+1)
+        st.dataframe(tid_df, width="stretch", height=400)
+        st.download_button("⬇️ Download PNOV parcels", tid_df.to_csv(index=False), "PNOV_parcels.csv", "text/csv", key=f"{kp}dl_pnov")
+
 
 def render_cost_tab(df, total, dr, kp=""):
     tc = df["Cost (£)"].sum(); avg = tc/total if total>0 else 0
@@ -354,29 +500,21 @@ def render_analysis_tab(df, total, dr, kp=""):
         "Always use your own judgement and local knowledge when deciding on actions."
     )
 
-
     with st.expander("📐 Statistical tests used (for managers)"):
         st.markdown("""
 **What tests does this tool use and why?**
 
 | Test | Used for | What it tells you | Why this test |
 |------|---------|-------------------|---------------|
-| **Chi-squared (χ²)** | Shift balance, Day of week | "Is the imbalance real or just random chance?" | Standard test for comparing observed vs expected counts. If p < 0.05, there's less than 5% chance the pattern is random. |
-| **Gini coefficient** | Cluster concentration | "Are losses piling up in a few spots or spread evenly?" | Ranges 0→1. Higher = more concentrated. Used in economics for inequality — here it measures loss inequality across locations. |
-| **Z-score** | DSP outlier detection | "Is this DSP genuinely worse or just slightly above average?" | Measures how many standard deviations from the mean. Z > 1.5 = statistically unusual, not just a small difference. |
-
-**How to explain this to stakeholders:**
-- "The tool checks whether patterns in the data are **statistically significant** — meaning unlikely to happen by chance."
-- "For example, if NS shift has 30 losses and AM has 10, the chi-squared test tells us whether that gap is big enough to be meaningful, or if it could just be random variation from a small sample."
-- "A p-value < 0.05 means: *if losses were truly random across shifts, there's less than a 5% chance we'd see this much imbalance.*"
-
-**Important caveat:** Statistical significance ≠ practical importance. A pattern can be statistically real but too small to be worth acting on. Always pair these numbers with your on-the-ground knowledge.
+| **Chi-squared (χ²)** | Shift balance | "Is the imbalance real or just random chance?" | Standard test for comparing observed vs expected counts. If p < 0.05, there's less than 5% chance the pattern is random. |
+| **Gini coefficient** | Cluster concentration | "Are losses piling up in a few spots or spread evenly?" | Ranges 0→1. Higher = more concentrated. |
+| **Z-score** | DSP outlier detection | "Is this DSP genuinely worse or just slightly above average?" | Measures how many standard deviations from the mean. Z > 1.5 = statistically unusual. |
 """)
 
     total_cost = df["Cost (£)"].sum()
     findings = []
 
-    # ─── LOSS REASONS OVERVIEW ────────────────────────────────────────────
+    # ─── LOSS REASONS OVERVIEW ────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("#### 📊 Loss Reasons — What to focus on")
     st.caption("Ordered by cost impact. The top reason is where most money is being lost.")
@@ -405,36 +543,7 @@ def render_analysis_tab(df, total, dr, kp=""):
             top_reason = lr.iloc[0]
             findings.append(f"Top loss reason: '{top_reason['Loss Reason']}' — {int(top_reason['Count'])} parcels, {fmt_cost(top_reason['Cost'])}")
 
-    # ─── DATA SUFFICIENCY ─────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("#### 📋 Do we have enough data?")
-    st.caption("Green = good to go. Red = need more uploads for that test to work.")
-
-    cluster_count = len(df["Cluster"].dropna().value_counts())
-    shift_count = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].count()
-    otr_count = len(df[df["Type"]=="OTR"])
-    day_count = df["Day of Week"].dropna().count() if "Day of Week" in df.columns else 0
-    size_count = len(df["Size Category"].value_counts())
-
-    checks = [
-        ("Where are losses happening?", "✅ Ready" if cluster_count >= 2 else "❌ Need more cluster data", ""),
-        ("Which shift is worst?", "✅ Ready" if shift_count >= 20 else f"❌ Need 20+ parcels (have {shift_count})", "Upload more days"),
-        ("Which costs the most?", "✅ Ready" if total_cost > 0 else "❌ No cost data", "Check PM has shipment_value"),
-        ("Any problem DSPs?", "✅ Ready" if otr_count >= 5 else f"❌ Need 5+ OTR (have {otr_count})", "Upload more data"),
-        ("Any problem days?", "✅ Ready" if day_count >= 14 else f"❌ Need 14+ parcels (have {day_count})", "Upload 2+ weeks"),
-        ("Size a factor?", "✅ Ready" if size_count >= 2 else "❌ Need size data", "Check SCC has dimensions"),
-        ("Repeat offender aisles?", "✅ Ready" if cluster_count >= 2 else "❌ Need cluster data", ""),
-        ("Happy path departure?", "✅ Ready" if len(df["Sub Bucket"].value_counts()) >= 2 else "❌ Need sub-bucket data", ""),
-    ]
-
-    ready = sum(1 for _, s, _ in checks if "✅" in s)
-    if ready == len(checks):
-        st.success(f"✅ All {len(checks)} tests ready!")
-    else:
-        st.info(f"{ready}/{len(checks)} tests ready. Upload more data to unlock the rest.")
-    st.dataframe(pd.DataFrame(checks, columns=["Question", "Status", "How to fix"]), width="stretch", hide_index=True)
-
-    # ─── RESULTS ──────────────────────────────────────────────────────────
+    # ─── RESULTS ──────────────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("#### 🎯 What the data suggests")
     st.caption("Look for 🎯 = key finding. These are patterns in the data, not instructions.")
@@ -532,7 +641,7 @@ def render_analysis_tab(df, total, dr, kp=""):
                         reason = otr[otr["DSP Name"] == dsp]["Loss Reason"].dropna().value_counts()
                         r_str = reason.index[0] if len(reason) > 0 else "Unknown"
                         st.markdown(f"- **{dsp}** — {int(dc[dsp])} losses ({fmt_cost(cost)}), top reason: _{r_str}_")
-                        findings.append(f"DSP \'{dsp}\': {int(dc[dsp])} losses ({fmt_cost(cost)}), reason: {r_str}")
+                        findings.append(f"DSP '{dsp}': {int(dc[dsp])} losses ({fmt_cost(cost)}), reason: {r_str}")
                 else:
                     st.success("✅ No outliers — losses spread fairly across DSPs.")
             else:
@@ -540,33 +649,14 @@ def render_analysis_tab(df, total, dr, kp=""):
         else:
             st.warning(f"Need 5+ OTR parcels (have {len(otr)}).")
 
-    # 5. DAY
-    with st.expander("📅 5. Do losses spike on certain days?"):
-        if "Day of Week" in df.columns:
-            dc2 = df["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0); dt = dc2.sum()
-            if dt >= 14:
-                exp = np.array([dt/7]*7); obs = np.array([dc2[d] for d in DAY_ORDER])
-                chi2d, pd2 = sp_stats.chisquare(obs, f_exp=exp)
-                tbl = pd.DataFrame({"Day": DAY_ORDER, "Losses": [int(dc2[d]) for d in DAY_ORDER], "Expected": [int(dt/7)]*7})
-                tbl.index = range(1, 8); st.dataframe(tbl, width="stretch")
-                if pd2 < 0.05:
-                    wd = dc2.idxmax(); wn = int(dc2.max())
-                    st.error(f"🎯 **{wd}** is the worst day: {wn} losses vs ~{int(dt/7)} expected.")
-                    findings.append(f"{wd} has {wn} losses vs expected {int(dt/7)}")
-                else:
-                    st.success("✅ No day stands out — losses spread evenly.")
-            else:
-                st.warning(f"Need 14+ dated parcels (have {dt}).")
-        else:
-            st.warning("No date data available.")
-
-    # 6. SIZE
-    with st.expander("📏 6. Are big parcels getting lost more?"):
+    # 5. SIZE
+    with st.expander("📏 5. Are big parcels getting lost more?"):
         sc3 = df["Size Category"].value_counts()
         if len(sc3) >= 2:
-            ov = sc3.get("Small Oversize", 0) + sc3.get("Large Oversize", 0)
+            oversize_cats = ["Small Oversize", "Standard Oversize", "Large Oversize"]
+            ov = sum(sc3.get(k, 0) for k in oversize_cats)
             ov_pct = round(ov / total * 100, 1)
-            ov_cost = df[df["Size Category"].isin(["Small Oversize", "Large Oversize"])]["Cost (£)"].sum()
+            ov_cost = df[df["Size Category"].isin(oversize_cats)]["Cost (£)"].sum()
             stbl = df.groupby("Size Category").agg(Count=("Tracking ID", "count"), Cost=("Cost (£)", "sum")).sort_values("Count", ascending=False).reset_index()
             stbl["% of losses"] = (stbl["Count"] / total * 100).round(1)
             stbl["Cost"] = stbl["Cost"].apply(fmt_cost); stbl.index = range(1, len(stbl)+1)
@@ -581,8 +671,8 @@ def render_analysis_tab(df, total, dr, kp=""):
         else:
             st.warning("Need package dimension data.")
 
-    # 7. REPEAT AISLES
-    with st.expander("🔁 7. Any repeat offender aisles?"):
+    # 6. REPEAT AISLES
+    with st.expander("🔁 6. Any repeat offender aisles?"):
         aisle_c = df["Aisle"].dropna().value_counts()
         if len(aisle_c) >= 2:
             repeat = aisle_c[aisle_c >= 3]
@@ -600,8 +690,8 @@ def render_analysis_tab(df, total, dr, kp=""):
         else:
             st.warning("Not enough aisle data.")
 
-    # 8. UTR vs OTR
-    with st.expander("🏠🚚 8. Station vs Road — where\'s the bigger problem?"):
+    # 7. UTR vs OTR
+    with st.expander("🏠🚚 7. Station vs Road — where's the bigger problem?"):
         otr_n = len(df[df["Type"]=="OTR"]); utr_n = len(df[df["Type"]=="UTR"])
         otr_cost = df[df["Type"]=="OTR"]["Cost (£)"].sum()
         utr_cost = df[df["Type"]=="UTR"]["Cost (£)"].sum()
@@ -624,41 +714,7 @@ def render_analysis_tab(df, total, dr, kp=""):
         else:
             st.warning("No type data available.")
 
-    # 9. HAPPY PATH DEPARTURE
-    with st.expander("🛤️ 9. Where do parcels leave the happy path?"):
-        st.caption("Happy path: Inducted → Stowed → Picked → Dispatched → Delivered. Each sub-bucket shows where the parcel fell off.")
-        sb_counts = df["Sub Bucket"].value_counts()
-        if len(sb_counts) >= 2:
-            sb_total = sb_counts.sum()
-            hp_order = [
-                ("Inducted Not Stowed", "Between induction and stow (NS)"),
-                ("Stowed Not Picked Up", "Between stow and pick (AM)"),
-                ("Debrief Receive(RTS)", "Returned after dispatch (PM)"),
-                ("Attempted", "Driver attempted, failed delivery (OTR)"),
-                ("No Further Status", "Dispatched, no scan after (OTR)"),
-                ("Damage", "Damaged on road (OTR)"),
-            ]
-            rows = []
-            for keyword, stage in hp_order:
-                matching = sb_counts[sb_counts.index.str.contains(keyword, case=False, na=False, regex=False)]
-                if len(matching) > 0:
-                    count = int(matching.sum())
-                    pct = round(count / sb_total * 100, 1)
-                    cost = df[df["Sub Bucket"].str.contains(keyword, case=False, na=False)]["Cost (£)"].sum()
-                    rows.append({"Stage": keyword, "What happened": stage, "Count": count, "%": f"{pct}%", "Cost": fmt_cost(cost)})
-            if rows:
-                hp_df = pd.DataFrame(rows); hp_df.index = range(1, len(hp_df)+1)
-                st.dataframe(hp_df, width="stretch")
-                worst = max(rows, key=lambda r: r["Count"])
-                st.error(f"🎯 Most parcels leave the happy path at: **{worst['Stage']}** ({worst['Count']} parcels, {worst['%']})")
-                st.caption(f"What this means: {worst['What happened']}")
-                findings.append(f"Most parcels leave happy path at \'{worst['Stage']}\' ({worst['Count']} parcels, {worst['%']})")
-            else:
-                st.info("Could not map sub-buckets to happy path stages.")
-        else:
-            st.warning("Need 2+ sub-bucket types.")
-
-    # ─── SUGGESTED ACTIONS ────────────────────────────────────────────────
+    # ─── SUGGESTED ACTIONS ────────────────────────────────────────────────────
     if findings:
         st.markdown("---")
         st.markdown("#### 💡 Suggested areas to look at")
@@ -666,75 +722,25 @@ def render_analysis_tab(df, total, dr, kp=""):
         for i, f in enumerate(findings, 1):
             st.markdown(f"**{i}.** {f}")
 
-def render_heatmap_tab(df, total, dr, kp=""):
-    """Cluster x Shift heatmap."""
-    st.markdown("#### 🗺️ Heatmap — Cluster × Shift")
-    with st.expander("❓ What is this?", expanded=False):
-        st.markdown("""
-This is a **grid showing losses by location AND time together**.
-
-- **Rows** = physical clusters in the station (where parcels are stored)
-- **Columns** = shift windows (NS, AM, PM, OTR)
-- **Each cell number** = how many parcels were lost in that cluster during that shift
-- **Colour** = darker red means more losses in that cell
-
-**How to read it:** Look for the darkest cells — those are your hotspots. If cluster "B3" is dark red under "NS" but light under "AM", it means most losses in B3 happen during night sort (stow process), not during pick.
-
-**Why it matters:** Instead of just knowing "B3 is bad" (Locations tab) or "NS is bad" (Shifts tab), this shows you the EXACT combination — e.g. "B3 during NS" — so you know precisely where and when to investigate.
-
-Only the top 15 clusters (by loss count) are shown to keep it readable.
-""")
-    clusters_with_data = df["Cluster"].dropna().value_counts().head(15).index.tolist()
-    if len(clusters_with_data) < 2:
-        st.warning("Need 2+ clusters with data to generate a heatmap."); return
-    hm_df = df[df["Cluster"].isin(clusters_with_data) & df["Shift"].isin(SHIFT_ORDER)]
-    if len(hm_df) == 0:
-        st.warning("No data for heatmap."); return
-    pivot = hm_df.groupby(["Cluster","Shift"]).size().unstack(fill_value=0).reindex(columns=SHIFT_ORDER, fill_value=0)
-    pivot = pivot.loc[clusters_with_data]
-    fig, ax = plt.subplots(figsize=(6, max(3, len(clusters_with_data)*0.4)))
-    im = ax.imshow(pivot.values, cmap="YlOrRd", aspect="auto")
-    ax.set_xticks(range(len(SHIFT_ORDER))); ax.set_xticklabels(SHIFT_ORDER, fontsize=8)
-    ax.set_yticks(range(len(pivot.index))); ax.set_yticklabels(trunc(pivot.index, 15), fontsize=7)
-    for i in range(len(pivot.index)):
-        for j in range(len(SHIFT_ORDER)):
-            val = pivot.values[i, j]
-            if val > 0:
-                ax.text(j, i, str(int(val)), ha="center", va="center", fontsize=7, color="black" if val < pivot.values.max()*0.7 else "white")
-    ax.set_xlabel("Shift", fontsize=8); ax.set_ylabel("Cluster", fontsize=8)
-    ax.set_title(f"Losses by Cluster × Shift ({dr})", fontsize=9)
-    plt.colorbar(im, ax=ax, shrink=0.8); plt.tight_layout()
-    st.pyplot(fig)
-    worst_cell = pivot.stack().idxmax()
-    worst_val = int(pivot.stack().max())
-    st.markdown(f"🎯 **Hotspot:** {worst_cell[0]} during **{worst_cell[1]}** shift — {worst_val} losses")
-    st.caption("💡 Tip: Cross-reference this with the Shift Drill-Down to see the actual tracking IDs for that hotspot.")
 
 def render_trend_tab(df, total, dr, kp=""):
     """Week-over-week trend — manual entry with sub-bucket breakdown."""
     st.markdown("#### 📈 Week-over-Week Trend")
     st.warning("⚠️ **Disclaimer:** Trends are only meaningful with enough data. "
-               "Include at least 3-4 weeks for a reliable picture. "
-               "With only 2 weeks, the direction could just be normal variation.")
+               "Include at least 3-4 weeks for a reliable picture.")
     st.caption("PerfectMile shows weekly data separately (L&U → Lost Focus). "
-               "Enter totals manually, or upload your weekly PM CSVs (recommended — auto-detects breakdown).")
-    
+               "Enter totals manually, or upload your weekly PM CSVs.")
+
     trend_mode = st.radio("Input method:", ["📝 Enter weekly totals", "📂 Upload weekly CSVs"], horizontal=True, key=f"{kp}tm")
-    
+
     if trend_mode == "📝 Enter weekly totals":
         st.markdown("**Enter numbers from PerfectMile → L&U → Lost Focus (Weekly view):**")
         num_weeks = st.slider("How many weeks?", 1, 12, 4, key=f"{kp}nw")
-        
-        # Sub-bucket breakdown toggle
         include_breakdown = st.checkbox("Include breakdown by loss type (PNOV, Inducted Not Stowed, etc.)", key=f"{kp}bd")
-        
-        # Define the common loss types users would track
         loss_types = ["PNOV", "Inducted Not Stowed", "Stowed Not Picked Up", "UTR Reprocess", "Lost On Road"]
-        
         weeks_data = []
-        
+
         if not include_breakdown:
-            # Simple mode - just totals
             cols = st.columns(min(num_weeks, 6))
             for i in range(num_weeks):
                 with cols[i % 6]:
@@ -743,7 +749,6 @@ def render_trend_tab(df, total, dr, kp=""):
                     if wk_count > 0:
                         weeks_data.append({"Week": wk_label, "Total": int(wk_count)})
         else:
-            # Detailed mode - totals + breakdown by type
             st.markdown("---")
             for i in range(num_weeks):
                 with st.expander(f"Week {i+1}", expanded=(i < 2)):
@@ -753,39 +758,31 @@ def render_trend_tab(df, total, dr, kp=""):
                         wk_total = st.number_input(f"Total lost:", min_value=0, value=0, step=1, key=f"{kp}wc{i}")
                     with c2:
                         st.caption("Breakdown (optional — leave 0 if unknown):")
-                    
                     type_cols = st.columns(len(loss_types))
                     type_values = {}
                     for j, lt in enumerate(loss_types):
                         with type_cols[j]:
                             v = st.number_input(lt, min_value=0, value=0, step=1, key=f"{kp}lt{i}_{j}")
                             type_values[lt] = v
-                    
                     if wk_total > 0:
                         row = {"Week": wk_label, "Total": int(wk_total)}
-                        for lt in loss_types:
-                            row[lt] = type_values[lt]
+                        for lt in loss_types: row[lt] = type_values[lt]
                         weeks_data.append(row)
-        
+
         if len(weeks_data) >= 2:
             weekly = pd.DataFrame(weeks_data)
             _render_trend_charts(weekly, loss_types if include_breakdown else None, kp)
         elif len(weeks_data) == 1:
-            st.info("Enter 1 more week to compare. Single week shown below.")
-            weekly = pd.DataFrame(weeks_data)
-            st.metric("This week", f"{int(weekly.iloc[0]['Total'])} lost")
+            st.info("Enter 1 more week to compare.")
         else:
             st.info("👆 Enter weekly totals above from PerfectMile → L&U → Lost Focus.")
-    
+
     else:
-        # Multi-file upload mode
         st.markdown("**Upload PM CSVs from different weeks:**")
-        st.caption("Download each week\'s CSV from PerfectMile separately, then upload them here. "
-                   "The tool will auto-count totals and break down by sub-bucket.")
         num_files = st.slider("How many weeks?", 1, 8, 4, key=f"{kp}nf")
         week_files = []
         loss_types = ["PNOV", "Inducted Not Stowed", "Stowed Not Picked Up", "UTR Reprocess", "Lost On Road"]
-        
+
         for i in range(num_files):
             col1, col2 = st.columns([1, 3])
             with col1:
@@ -795,43 +792,33 @@ def render_trend_tab(df, total, dr, kp=""):
             if f_up:
                 wdf = pd.read_csv(f_up)
                 row = {"Week": wk_label, "Total": len(wdf)}
-                # Auto-breakdown by sub_bucket
                 if "sub_bucket" in wdf.columns:
                     sb = wdf["sub_bucket"].fillna("")
-                    row["PNOV"] = int(sb.str.contains("PNOV", case=False).sum())
+                    row["PNOV"] = int(sb.str.contains("PNOV|No Further Status", case=False).sum())
                     row["Inducted Not Stowed"] = int(sb.str.contains("Inducted Not Stowed", case=False).sum())
                     row["Stowed Not Picked Up"] = int(sb.str.contains("Stowed Not Picked Up", case=False).sum())
                     row["UTR Reprocess"] = int(sb.str.contains("UTR Reprocess", case=False).sum())
                     row["Lost On Road"] = int(sb.str.contains("Lost On Road", case=False).sum())
                 week_files.append(row)
-        
+
         if len(week_files) >= 2:
             weekly = pd.DataFrame(week_files)
             has_breakdown = any(weekly.get(lt, pd.Series(0)).sum() > 0 for lt in loss_types)
             _render_trend_charts(weekly, loss_types if has_breakdown else None, kp)
         elif len(week_files) == 1:
-            st.info("Upload 1 more week to see a trend comparison. Single week data shown below.")
-            weekly = pd.DataFrame(week_files)
-            st.metric("This week", f"{int(weekly.iloc[0]['Total'])} lost")
-            has_breakdown = any(weekly.get(lt, pd.Series(0)).sum() > 0 for lt in loss_types)
-            if has_breakdown:
-                bd_cols = [lt for lt in loss_types if lt in weekly.columns and weekly[lt].sum() > 0]
-                if bd_cols:
-                    st.dataframe(weekly[["Week", "Total"] + bd_cols], width="stretch", hide_index=True)
+            st.info("Upload 1 more week to see a trend comparison.")
         else:
             st.info("👆 Upload PM CSVs from different weeks above.")
+
 
 def _render_trend_charts(weekly, loss_types=None, kp=""):
     """Render trend charts from weekly DataFrame."""
     st.markdown("---")
-    
-    # ─── MAIN TREND LINE ──────────────────────────────────────────────────
     st.markdown("##### 📈 Overall Trend")
     fig, ax = plt.subplots(figsize=(7, 3))
     ax.plot(weekly["Week"], weekly["Total"], marker="o", color="steelblue", linewidth=2, label="Total Lost")
     for i, row in weekly.iterrows():
         ax.annotate(str(int(row["Total"])), xy=(row["Week"], row["Total"]), xytext=(0, 8), textcoords="offset points", ha="center", fontsize=8)
-    # Average line
     avg = weekly["Total"].mean()
     ax.axhline(y=avg, color="gray", linestyle="--", linewidth=1, alpha=0.7)
     ax.text(len(weekly)-1, avg+2, f"avg: {avg:.0f}", fontsize=7, color="gray")
@@ -839,223 +826,166 @@ def _render_trend_charts(weekly, loss_types=None, kp=""):
     ax.set_title("Lost Parcels per Week", fontsize=9); ax.tick_params(labelsize=7)
     plt.xticks(rotation=45); plt.tight_layout()
     st.pyplot(fig)
-    
-    # Trend verdict
+
     first_w = int(weekly.iloc[0]["Total"]); last_w = int(weekly.iloc[-1]["Total"])
     if first_w > 0:
         pct_change = round((last_w - first_w) / first_w * 100, 1)
     else:
         pct_change = 0
-    
+
     if last_w < first_w * 0.8:
         st.success(f"📉 **Improving!** {first_w} → {last_w} ({pct_change:+.1f}%)")
     elif last_w > first_w * 1.2:
         st.error(f"📈 **Getting worse.** {first_w} → {last_w} ({pct_change:+.1f}%)")
     else:
         st.info(f"➡️ **Stable.** {first_w} → {last_w} ({pct_change:+.1f}%, within ±20%)")
-    
-    # ─── SUMMARY STATS ────────────────────────────────────────────────────
-    with st.expander("📊 Summary Statistics"):
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Average/week", f"{avg:.0f}")
-        col2.metric("Best week", f"{int(weekly['Total'].min())} ({weekly.loc[weekly['Total'].idxmin(), 'Week']})")
-        col3.metric("Worst week", f"{int(weekly['Total'].max())} ({weekly.loc[weekly['Total'].idxmax(), 'Week']})")
-        std = weekly["Total"].std()
-        col4.metric("Volatility (σ)", f"±{std:.0f}")
-        st.caption("Low volatility = consistent performance. High volatility = unpredictable — investigate what changed in the worst weeks.")
-    
-    # ─── BREAKDOWN BY LOSS TYPE ────────────────────────────────────────────
+
     if loss_types:
         has_data = [lt for lt in loss_types if lt in weekly.columns and weekly[lt].sum() > 0]
         if has_data:
             st.markdown("---")
             st.markdown("##### 📊 Trend by Loss Type")
-            st.caption("Select which loss types to overlay on the chart. Compare how different categories are trending.")
-            
             selected_types = st.multiselect("Show on chart:", has_data, default=has_data[:3], key=f"{kp}lt_sel")
-            
             if selected_types:
                 colors = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6"]
                 fig2, ax2 = plt.subplots(figsize=(7, 3.5))
                 for idx, lt in enumerate(selected_types):
                     c = colors[idx % len(colors)]
                     ax2.plot(weekly["Week"], weekly[lt], marker="o", linewidth=1.5, label=lt, color=c)
-                    for i, row in weekly.iterrows():
-                        if row[lt] > 0:
-                            ax2.annotate(str(int(row[lt])), xy=(row["Week"], row[lt]), xytext=(0, 6), textcoords="offset points", ha="center", fontsize=6, color=c)
                 ax2.set_xlabel("Week", fontsize=8); ax2.set_ylabel("Losses", fontsize=8)
                 ax2.set_title("Loss Types Over Time", fontsize=9); ax2.tick_params(labelsize=7)
                 ax2.legend(fontsize=7, loc="upper right")
                 plt.xticks(rotation=45); plt.tight_layout()
                 st.pyplot(fig2)
-            
-            # Breakdown table
-            with st.expander("📋 Full breakdown table"):
-                display_cols = ["Week", "Total"] + has_data
-                disp = weekly[display_cols].copy()
-                disp["Other"] = disp["Total"] - disp[has_data].sum(axis=1)
-                disp["Other"] = disp["Other"].clip(lower=0)
-                disp.index = range(1, len(disp)+1)
-                st.dataframe(disp, width="stretch", hide_index=True)
-            
-            # Individual type trends
-            with st.expander("📈 Individual type verdicts"):
-                for lt in has_data:
-                    first_lt = int(weekly.iloc[0][lt]); last_lt = int(weekly.iloc[-1][lt])
-                    if first_lt > 0:
-                        pct = round((last_lt - first_lt) / first_lt * 100, 1)
-                        if pct <= -20:
-                            st.markdown(f"- 📉 **{lt}:** {first_lt} → {last_lt} ({pct:+.1f}%) — improving")
-                        elif pct >= 20:
-                            st.markdown(f"- 📈 **{lt}:** {first_lt} → {last_lt} ({pct:+.1f}%) — getting worse")
-                        else:
-                            st.markdown(f"- ➡️ **{lt}:** {first_lt} → {last_lt} ({pct:+.1f}%) — stable")
-                    elif last_lt > 0:
-                        st.markdown(f"- 🆕 **{lt}:** 0 → {last_lt} (new this period)")
-                    else:
-                        st.markdown(f"- ✅ **{lt}:** 0 → 0 (none recorded)")
-    
-    # ─── WEEK-OVER-WEEK CHANGE TABLE ──────────────────────────────────────
-    with st.expander("📉 Week-over-week change"):
-        if len(weekly) >= 2:
-            wow = weekly[["Week", "Total"]].copy()
-            wow["Change"] = wow["Total"].diff()
-            wow["% Change"] = wow["Total"].pct_change().multiply(100).round(1)
-            wow["Direction"] = wow["Change"].apply(lambda x: "📉 Down" if x < 0 else ("📈 Up" if x > 0 else "➡️ Same") if pd.notna(x) else "—")
-            wow = wow.fillna("—")
-            wow.index = range(1, len(wow)+1)
-            st.dataframe(wow, width="stretch", hide_index=True)
-    
-    # ─── DOWNLOAD ─────────────────────────────────────────────────────────
+
     st.download_button("⬇️ Download trend data", weekly.to_csv(index=False), "weekly_trend.csv", "text/csv", key=f"{kp}dl_trend")
 
 
-def render_day_tab(df, total, dr, kp=""):
-    """Day of week tab with tracking ID drill-down."""
-    st.markdown("#### 📅 Day of Week")
-    st.caption("The day shown is when Perfect Mile marked the parcel as LOST (event_datetime). "
-               "This is NOT necessarily when the parcel actually went missing — it\'s when the system "
-               "flagged it. A parcel that went missing on Friday night might only be marked lost on Monday.")
-    if "Day of Week" not in df.columns or df["Day of Week"].dropna().count() == 0:
+def render_distribution_tab(df, total, dr, kp=""):
+    """Shows actual loss event distribution across the week using Marked Lost DT date (event_datetime).
+
+    NOTE: The Day of Week from event_datetime shows when the SYSTEM marked the parcel as lost,
+    NOT when it actually went missing. This tab shows the distribution as-is and explains the caveat.
+    """
+    st.markdown("#### 📅 Loss Event Distribution")
+    st.warning(
+        "⚠️ **Important:** The dates below show when **Perfect Mile flagged the parcel as lost** "
+        "(event_datetime), NOT when the loss physically occurred. The system often marks parcels lost "
+        "in batches (e.g. end-of-day scrubs). This means the day distribution reflects system timing, "
+        "not real loss timing. Use this to understand system patterns, not to identify 'problem days'."
+    )
+
+    if "Marked Lost DT" not in df.columns or df["Marked Lost DT"].dropna().count() == 0:
         st.warning("No date data available."); return
-    dd = df["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
-    with st.expander("📅 Overview", expanded=True):
-        vm = st.radio("View:", ["Chart","Table"], horizontal=True, key=f"{kp}dv")
-        if vm == "Chart":
-            fig, ax = plt.subplots(figsize=CHART)
-            ax.plot(dd.index, dd.values, marker="o", color="green", linewidth=2)
-            for i, (d, v) in enumerate(dd.items()): ax.annotate(str(int(v)), xy=(i, v), xytext=(0, 8), textcoords="offset points", ha="center", fontsize=8)
-            ax.set_ylabel("Lost", fontsize=8); ax.set_title(f"By Day ({dr})", fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout()
+
+    valid_dates = df["Marked Lost DT"].dropna()
+
+    # Show actual date distribution (which specific dates had most losses)
+    with st.expander("📊 Losses by Actual Date (chronological)", expanded=True):
+        date_counts = valid_dates.dt.date.value_counts().sort_index()
+        if len(date_counts) > 0:
+            fig, ax = plt.subplots(figsize=(8, 3))
+            ax.bar(range(len(date_counts)), date_counts.values, color="steelblue")
+            if len(date_counts) <= 14:
+                ax.set_xticks(range(len(date_counts)))
+                ax.set_xticklabels([d.strftime("%d %b") for d in date_counts.index], fontsize=7, rotation=45)
+            else:
+                step = max(1, len(date_counts) // 10)
+                ax.set_xticks(range(0, len(date_counts), step))
+                ax.set_xticklabels([date_counts.index[i].strftime("%d %b") for i in range(0, len(date_counts), step)], fontsize=7, rotation=45)
+            for i, v in enumerate(date_counts.values):
+                if v >= date_counts.values.max() * 0.7:
+                    ax.text(i, v+0.2, str(int(v)), ha="center", fontsize=6)
+            ax.set_ylabel("Parcels Marked Lost", fontsize=8)
+            ax.set_title(f"Loss Events by Date ({dr})", fontsize=9)
+            ax.tick_params(labelsize=7); plt.tight_layout()
             st.pyplot(fig)
+
+            st.caption(f"Peak date: **{date_counts.idxmax().strftime('%A %d %b %Y')}** ({int(date_counts.max())} parcels)")
+
+    # Day of week aggregation with caveat
+    with st.expander("📅 Day of Week Aggregation (system flag dates)"):
+        st.caption("This aggregates by the day the system flagged the loss. Due to batch processing "
+                   "(e.g. EOD scrubs at ~23:00), certain days may appear inflated. This is a system artefact, "
+                   "not a reflection of when losses occurred.")
+        dd = df["Day of Week"].dropna().value_counts().reindex(DAY_ORDER, fill_value=0)
+        tbl = pd.DataFrame({"Day": DAY_ORDER, "Flagged Lost": [int(dd[d]) for d in DAY_ORDER]})
+        tbl["% of Total"] = (tbl["Flagged Lost"] / tbl["Flagged Lost"].sum() * 100).round(1)
+        tbl.index = range(1, 8)
+        st.dataframe(tbl, width="stretch")
+
+        if dd.sum() >= 14:
+            expected = dd.sum() / 7
+            max_day = dd.idxmax(); max_val = int(dd.max())
+            if max_val > expected * 1.5:
+                st.info(f"ℹ️ **{max_day}** shows {max_val} losses (vs ~{int(expected)} expected if even). "
+                        f"This is likely due to system batch processing timing, not actual loss patterns.")
+
+    # Hour of day distribution (from Prev Event DT — actual last scan time)
+    with st.expander("⏰ Hour of Last Scan (actual loss timing proxy)"):
+        st.caption("This uses the `previous_event_datetime` — the time of the last scan before the parcel was lost. "
+                   "This is a better proxy for WHEN losses actually occur than the system flag date.")
+        if "Prev Event DT" in df.columns:
+            hours = df["Prev Event DT"].dropna().dt.hour
+            if len(hours) > 0:
+                hour_counts = hours.value_counts().sort_index().reindex(range(24), fill_value=0)
+                fig, ax = plt.subplots(figsize=(8, 2.5))
+                colors = []
+                for h in range(24):
+                    shift = SHIFT_HOUR_MAP.get(h, "Unknown")
+                    colors.append(SHIFT_COLORS.get(shift, "gray"))
+                ax.bar(range(24), hour_counts.values, color=colors)
+                ax.set_xlabel("Hour of Day", fontsize=8); ax.set_ylabel("Parcels", fontsize=8)
+                ax.set_title("Last Scan Hour Before Loss (coloured by shift)", fontsize=9)
+                ax.set_xticks(range(24)); ax.tick_params(labelsize=7); plt.tight_layout()
+                st.pyplot(fig)
+
+                st.caption("🟦 NS (23:45–09:45) | 🟧 AM (09:45–14:00) | 🟩 PM (14:00–23:45)")
+            else:
+                st.info("No previous_event_datetime data available.")
         else:
-            st.dataframe(make_table(dd, "Day", "Lost"), width="stretch")
-    with st.expander("🔍 Tracking IDs by Day"):
-        day_sel = st.selectbox("Select day:", DAY_ORDER, key=f"{kp}day_sel")
-        day_df = df[df["Day of Week"] == day_sel]
-        if len(day_df) > 0:
-            st.write(f"**{day_sel}: {len(day_df)} parcels** — {fmt_cost(day_df['Cost (£)'].sum())}")
-            tid_cols = [c for c in ["Tracking ID","Sub Bucket","Type","Cluster","Aisle","DSP Name","Cost (£)","Loss Reason","Shift"] if c in day_df.columns]
-            tid_df = day_df[tid_cols].reset_index(drop=True)
-            tid_df.index = range(1, len(tid_df)+1)
-            st.dataframe(tid_df, width="stretch", height=400)
-            st.download_button(f"⬇️ Download {day_sel} parcels", tid_df.to_csv(index=False), f"{day_sel}_parcels.csv", "text/csv", key=f"{kp}dl_{day_sel}")
-        else:
-            st.info(f"No parcels marked lost on {day_sel}.")
+            st.info("No previous event datetime column found.")
+
 
 def render_export_tab(df, total, dr, kp="", station_name=""):
-    """Export tab — multi-sheet download as ZIP of CSVs or single CSV."""
+    """Export tab."""
     st.markdown("#### 💾 Export All Processed Data")
-    st.caption("Download everything for further analysis in Excel, R, or Python.")
-    
-    exp_mode = st.radio("Format:", ["📊 Multi-file ZIP (separate tables)", "📄 Single CSV (all data)"], horizontal=True, key=f"{kp}exp_fmt")
-    
-    if exp_mode == "📊 Multi-file ZIP (separate tables)":
-        st.markdown("""**Files included in ZIP:**
-- **All_Data.csv** — every parcel with all processed columns
-- **By_Location.csv** — cluster/aisle breakdown with costs
-- **By_Shift.csv** — shift breakdown with costs
-- **By_Day.csv** — day of week breakdown
-- **By_DSP.csv** — DSP breakdown (OTR only)
-- **Loss_Reasons.csv** — all reasons ordered by cost""")
-        
+
+    exp_mode = st.radio("Format:", ["📊 Multi-file ZIP", "📄 Single CSV"], horizontal=True, key=f"{kp}exp_fmt")
+
+    if exp_mode == "📊 Multi-file ZIP":
         import zipfile
         output = BytesIO()
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
-            # All Data
             exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","shipment_value"]
             clean_cols = [c for c in df.columns if c not in exc]
             zf.writestr("All_Data.csv", df[clean_cols].to_csv(index=False))
-            
-            # By Location
             if df["Cluster"].dropna().count() > 0:
                 loc_df = df.groupby("Cluster").agg(Lost=("Tracking ID","count"), Cost=("Cost (£)","sum")).sort_values("Lost", ascending=False).reset_index()
                 zf.writestr("By_Location.csv", loc_df.to_csv(index=False))
-            
-            # By Shift
             shift_df = df[df["Shift"].isin(SHIFT_ORDER)].groupby("Shift").agg(Lost=("Tracking ID","count"), Cost=("Cost (£)","sum")).reindex(SHIFT_ORDER).reset_index()
             zf.writestr("By_Shift.csv", shift_df.to_csv(index=False))
-            
-            # By Day
-            if "Day of Week" in df.columns:
-                day_df = df.groupby("Day of Week").agg(Lost=("Tracking ID","count"), Cost=("Cost (£)","sum")).reindex(DAY_ORDER).reset_index()
-                zf.writestr("By_Day.csv", day_df.to_csv(index=False))
-            
-            # By DSP
             dsp_data = df.dropna(subset=["DSP Name"])
             if len(dsp_data) > 0:
                 dsp_df = dsp_data.groupby("DSP Name").agg(Lost=("Tracking ID","count"), Cost=("Cost (£)","sum")).sort_values("Lost", ascending=False).reset_index()
                 zf.writestr("By_DSP.csv", dsp_df.to_csv(index=False))
-            
-            # Loss Reasons
             lr_df = df.groupby("Loss Reason").agg(Count=("Tracking ID","count"), Cost=("Cost (£)","sum")).sort_values("Cost", ascending=False).reset_index()
-            lr_df["% of Total"] = (lr_df["Count"] / total * 100).round(1)
             zf.writestr("Loss_Reasons.csv", lr_df.to_csv(index=False))
-        
         output.seek(0)
         fname = f"{station_name}_Analysis.zip" if station_name else "Lost_Parcel_Analysis.zip"
         st.download_button(f"⬇️ Download ZIP ({fname})", output, fname, "application/zip", key=f"{kp}dl_zip")
-        st.caption(f"{len(df)} parcels across 6 files — open each CSV as a separate tab in Excel")
-    
     else:
-        clean_mode = st.radio("Columns:", ["Clean (no raw columns)", "Full (all columns for modelling)"], horizontal=True, key=f"{kp}exp_mode")
-        if clean_mode == "Clean (no raw columns)":
-            exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","shipment_value"]
-            ec = [c for c in df.columns if c not in exc]
-            fname = f"{station_name}_Clean.csv" if station_name else "Lost_Clean.csv"
-            st.download_button(f"⬇️ Clean CSV", df[ec].to_csv(index=False), fname, "text/csv", key=f"{kp}dl_clean")
-            st.caption(f"{len(ec)} columns, {len(df)} rows")
-        else:
-            fname = f"{station_name}_Full.csv" if station_name else "Lost_Full.csv"
-            st.download_button(f"⬇️ Full CSV", df.to_csv(index=False), fname, "text/csv", key=f"{kp}dl_full")
-            st.caption(f"{len(df.columns)} columns, {len(df)} rows")
-    
-    st.markdown("---")
-    with st.expander("📖 Column guide"):
-        st.markdown("""
-| Column | Description |
-|--------|-------------|
-| Tracking ID | Unique parcel identifier |
-| Sub Bucket | Where in the process it was lost |
-| Type | OTR (road) or UTR (station) |
-| Shift | NS / AM / PM / OTR |
-| Day of Week | Day parcel was marked lost |
-| Cost (£) | Shipment value |
-| Cluster / Aisle / Sort Zone | Physical location in station |
-| DSP Name | Delivery partner (OTR only) |
-| Size Category | Small / Medium / Small Oversize / Large Oversize |
-| Loss Reason | Reason code from Perfect Mile |
-| UTR Reason | More specific reason for station losses |
-| Longest Side | Max dimension in cm |
-""")
-    st.info("💡 **Tip:** Open the CSVs in Excel (each becomes a tab), or paste into R/Python for deeper modelling and forecasting.")
+        exc = ["Prev Event DT","previous_event_datetime","bucket","sub_bucket","previous_reason","previous_reason_3","event_datetime","shipment_value"]
+        ec = [c for c in df.columns if c not in exc]
+        fname = f"{station_name}_Clean.csv" if station_name else "Lost_Clean.csv"
+        st.download_button(f"⬇️ Clean CSV", df[ec].to_csv(index=False), fname, "text/csv", key=f"{kp}dl_clean")
 
 
 def render_guide():
-    """How to use — top-level guide with expandable sections."""
+    """How to use — top-level guide."""
     st.markdown("### 📖 How to Use This Tool")
     st.markdown("---")
-    
-    with st.expander("🚀 Quick Start (read this first)", expanded=True):
+    with st.expander("🚀 Quick Start", expanded=True):
         st.markdown("""
 **You need two CSV files:**
 
@@ -1066,56 +996,30 @@ def render_guide():
 
 **Steps:** Upload both → Read the tabs → Pick one problem to investigate → Go observe
 """)
-    
     with st.expander("📊 What each tab shows"):
         st.markdown("""
-| Tab | What it tells you | When to use it |
-|-----|------------------|----------------|
-| 📊 **Summary** | Overview — OTR vs UTR, clusters, sub-buckets | First look at the data |
-| 📍 **Locations** | Where in the station losses happen | Finding problem areas to walk |
-| 💡 **Shifts** | Which time window loses most + all tracking IDs | Identifying shift patterns |
-| 💰 **Cost** | Financial impact by type, DSP | Prioritising by £ value |
-| 🔬 **Analysis** | Pattern detection (an AID, not a GUIDE) | Deeper investigation |
-| 🗺️ **Heatmap** | Cluster × Shift grid | Spotting hotspots at a glance |
-| 📈 **Trend** | Week-over-week (needs 2+ weeks) | Tracking improvement |
-| 📅 **Day** | Worst day + drill-down to parcels | Finding day patterns |
-| 💾 **Export** | Multi-tab Excel or CSV for R/Python | Further modelling |
+| Tab | What it tells you |
+|-----|------------------|
+| 📊 **Summary** | Overview — OTR vs UTR, clusters, sub-buckets, sizes |
+| 📍 **Locations** | Where in the station losses happen |
+| 💡 **Shifts** | Which time window loses most + tracking IDs |
+| 📦 **PNOV** | Package Not On Vehicle — DSPs/Flex responsible |
+| 💰 **Cost** | Financial impact by type, DSP |
+| 🔬 **Analysis** | Pattern detection (an AID, not a GUIDE) |
+| 📈 **Trend** | Week-over-week (needs 2+ weeks) |
+| 📅 **Distribution** | When losses are flagged (system timing) |
+| 💾 **Export** | Download for further analysis |
 """)
-    
-    with st.expander("❓ Common Questions"):
-        st.markdown("""
-**"What does 'No Reason' mean as a loss reason?"**
+    with st.expander("📏 Size Classification (Amazon UK FBA Tiers)"):
+        st.markdown(f"""
+This tool classifies parcels using **Amazon UK FBA size tiers** based on the longest side dimension:
 
-This means Perfect Mile has no recorded reason for why the parcel was lost. It happens when:
-- The system auto-concessed the parcel (timeout, no scan for X days)
-- The parcel was marked lost in bulk without individual investigation
-- The reason field was never filled in by the team
+{SIZE_TIER_INFO}
 
-**It does NOT mean there IS no reason** — it means the reason wasn't captured. These are often worth investigating as they may indicate process gaps in recording why parcels go missing.
-
-**"Why don't all parcels match?"**
-
-See the ℹ️ info box after upload — parcels may not match if they were never inducted, had no SCC scan, or have a tracking ID format mismatch.
-
-**"Can I compare the same station across different weeks?"**
-
-Yes! Use **Multi-Station mode** — upload Week 1 as "Station 1" and Week 2 as "Station 2". The comparison works the same way. Label them by date range so you can tell them apart.
-
-**"How accurate is the Analysis tab?"**
-
-It uses statistical tests (chi-squared, z-scores, Gini) to find patterns. These are INDICATIONS, not proof. Always verify by walking the floor and talking to the team. The Analysis tab says "here's something unusual" — YOU decide if it matters.
-""")
-    
-    with st.expander("💡 Tips for better results"):
-        st.markdown("""
-- 📅 **More data = better** — 2+ weeks recommended for trend analysis
-- 🔒 **PII auto-removed** — customer names/order IDs are stripped on upload
-- 🔄 **Multi-station** — compare stations OR compare time periods
-- 💾 **Export** for deeper modelling in R or Python
-- 🎯 **Focus on one thing** — pick the top problem, go investigate, come back with fresh data
+*Source: Amazon Seller Central Europe — Product Size Tier reference*
 """)
 
-# ─── MAIN ──────────────────────────────────────────────────────────────────────
+# ─── MAIN ────────────────────────────────────────────────────────────────────
 mode = st.radio("Mode:", ["📖 Guide","Single Station","Multi-Station / Compare"], horizontal=True, key="mode")
 
 if mode == "📖 Guide":
@@ -1147,38 +1051,91 @@ elif mode == "Single Station":
         c1.metric("Lost", total); c2.metric("Cost", fmt_cost(tc)); c3.metric("Cluster", safe_top(df["Cluster"]))
         c4.metric("Aisle", safe_top(df["Aisle"])); c5.metric("DSP", str(safe_top(df["DSP Name"]))[:15])
         sk = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"]; c6.metric("Shift", safe_top(sk) if len(sk)>0 else "N/A")
-        # Tabs
-        t1,t2,t3,t4,t5,t6,t7,t8,t9 = st.tabs(["📊 Summary","📍 Locations","💡 Shifts","💰 Cost","🔬 Analysis","🗺️ Heatmap","📈 Trend","📅 Day","💾 Export"])
+        # Tabs (removed Heatmap and Day, added PNOV and Distribution)
+        t1,t2,t3,t4,t5,t6,t7,t8,t9 = st.tabs(["📊 Summary","📍 Locations","💡 Shifts","📦 PNOV","💰 Cost","🔬 Analysis","📈 Trend","📅 Distribution","💾 Export"])
         with t1:
+            # OTR vs UTR pie
             with st.expander("🥧 OTR vs UTR"): st.pyplot(make_pie_otr_utr(df, total, f"OTR vs UTR ({dr})"))
-            with st.expander("📍 Clusters"):
+
+            # Combined Cluster view (single expander with all cluster data)
+            with st.expander("📍 Clusters — All Losses", expanded=True):
                 cc = df["Cluster"].dropna().value_counts()
                 if len(cc)>0:
                     vm = st.radio("View:", ["Chart","Table + Cost"], horizontal=True, key="cv")
-                    if vm=="Chart": st.pyplot(make_bar_horiz(cc, f"Clusters ({dr})"))
+                    if vm=="Chart": st.pyplot(make_bar_horiz(cc, f"All Clusters ({dr})"))
                     else: st.dataframe(make_cost_table(df.dropna(subset=["Cluster"]), "Cluster"), width="stretch")
+
+            # Cluster drill-down selectbox in Summary
+            with st.expander("🔍 Cluster Drill-Down"):
+                clusters = sorted(df["Cluster"].dropna().unique())
+                if clusters:
+                    sel_cluster = st.selectbox("Select Cluster:", clusters, key="sum_cl_drill")
+                    filt = df[df["Cluster"] == sel_cluster]
+                    st.write(f"**{len(filt)} parcels** in {sel_cluster} — {fmt_cost(filt['Cost (£)'].sum())}")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**By Aisle:**")
+                        ad = filt["Aisle"].dropna().value_counts()
+                        if len(ad) > 0: st.dataframe(make_table(ad, "Aisle", "Count"), width="stretch")
+                    with col2:
+                        st.markdown("**By Shift:**")
+                        sd = filt[filt["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts().reindex(SHIFT_ORDER, fill_value=0)
+                        st.dataframe(make_table(sd, "Shift", "Count"), width="stretch")
+                else:
+                    st.info("No cluster data available.")
+
+            # Sub Buckets
             with st.expander("🏷️ Sub Buckets"):
                 sb2 = df["Sub Bucket"].value_counts()
                 if len(sb2)>0:
                     vm = st.radio("View:", ["Chart","Table + Cost"], horizontal=True, key="sv")
                     if vm=="Chart": st.pyplot(make_bar_horiz(sb2, f"Sub Buckets ({dr})", color="teal"))
                     else: st.dataframe(make_cost_table(df, "Sub Bucket"), width="stretch")
+
+            # Size Category (Amazon UK FBA tiers)
+            with st.expander("📏 Lost Parcels by Size (Amazon UK FBA Tiers)"):
+                sc = df["Size Category"].value_counts()
+                if len(sc) > 0:
+                    size_order = ["Small Envelope", "Standard Envelope", "Standard Parcel", "Small Oversize", "Standard Oversize", "Large Oversize", "Unknown"]
+                    sc_ordered = sc.reindex([s for s in size_order if s in sc.index])
+                    vm = st.radio("View:", ["Chart", "Table + Cost"], horizontal=True, key="sz_v")
+                    if vm == "Chart":
+                        fig, ax = plt.subplots(figsize=(7, max(2, len(sc_ordered)*0.3)))
+                        colors_size = {"Small Envelope": "#2ecc71", "Standard Envelope": "#27ae60", "Standard Parcel": "#3498db",
+                                      "Small Oversize": "#f39c12", "Standard Oversize": "#e74c3c", "Large Oversize": "#8e44ad", "Unknown": "#95a5a6"}
+                        bar_colors = [colors_size.get(s, "gray") for s in sc_ordered.index]
+                        ax.barh(list(sc_ordered.index), sc_ordered.values, color=bar_colors)
+                        ax.invert_yaxis()
+                        for i, v in enumerate(sc_ordered.values): ax.text(v+0.2, i, str(int(v)), va="center", fontsize=7)
+                        ax.set_xlabel("Lost Parcels", fontsize=8); ax.set_title(f"Lost by Size Tier ({dr})", fontsize=9)
+                        ax.tick_params(labelsize=7); plt.tight_layout()
+                        st.pyplot(fig)
+                    else:
+                        size_tbl = df.groupby("Size Category").agg(Lost=("Tracking ID","count"), Cost=("Cost (£)","sum")).reindex([s for s in size_order if s in df["Size Category"].values]).reset_index()
+                        size_tbl["Cost"] = size_tbl["Cost"].apply(fmt_cost)
+                        size_tbl["% of Total"] = (size_tbl["Lost"] / total * 100).round(1)
+                        size_tbl.index = range(1, len(size_tbl)+1)
+                        st.dataframe(size_tbl, width="stretch")
+                    st.caption("Size tiers based on longest side: Small Envelope ≤20cm, Std Envelope ≤33cm, Std Parcel ≤45cm, Small Oversize ≤61cm, Std Oversize ≤120cm, Large Oversize >120cm")
+                else:
+                    st.info("No size data available. Ensure SCC has Package Length/Width/Height columns.")
+
         with t2: render_locations_tab(df, total, dr, kp="s_")
         with t3: render_opportunities_tab(df, total, dr, kp="s_")
-        with t4: render_cost_tab(df, total, dr, kp="s_")
-        with t5: render_analysis_tab(df, total, dr, kp="s_")
-        with t6: render_heatmap_tab(df, total, dr, kp="s_")
+        with t4: render_pnov_tab(df, total, dr, kp="s_")
+        with t5: render_cost_tab(df, total, dr, kp="s_")
+        with t6: render_analysis_tab(df, total, dr, kp="s_")
         with t7: render_trend_tab(df, total, dr, kp="s_")
-        with t8: render_day_tab(df, total, dr, kp="s_")
+        with t8: render_distribution_tab(df, total, dr, kp="s_")
         with t9: render_export_tab(df, total, dr, kp="s_")
     else: st.info("👆 Upload both files.")
 
 else:
-    st.caption("Upload multiple stations to compare, OR upload the same station from different time periods to track progress.")
+    st.caption("Upload multiple stations to compare, OR upload the same station from different time periods.")
     num = st.slider("Datasets to compare:", 2, 5, 2, key="ns"); uploaded = {}
     for i in range(num):
-        with st.expander(f"Dataset {i+1} (e.g. Station or Week)", expanded=(i<2)):
-            nm_input = st.text_input(f"Label (optional):", key=f"nm_{i}", placeholder=f"e.g. DRM2 Week 1, or Station Name")
+        with st.expander(f"Dataset {i+1}", expanded=(i<2)):
+            nm_input = st.text_input(f"Label:", key=f"nm_{i}", placeholder=f"e.g. DRM2 Week 1")
             a, b = st.columns(2)
             with a: pf = st.file_uploader(f"PM ({i+1})", type="csv", key=f"mp{i}")
             with b: sf = st.file_uploader(f"SCC ({i+1})", type="csv", key=f"ms{i}")
@@ -1198,7 +1155,7 @@ else:
         for n in names:
             sc_val, sc_col, sc_lab, sc_reas = render_health_score(stations[n], len(stations[n]))
             st.caption(f"{n}: {sc_col} {sc_val}/10 — {sc_lab}" + (f" ({', '.join(sc_reas)})" if sc_reas else ""))
-        t1,t2,t3,t4,t5,t6,t7,t8,t9 = st.tabs(["📊 Summary","📍 Locations","💡 Shifts","💰 Cost","🔬 Analysis","🗺️ Heatmap","📈 Trend","📅 Day","💾 Export"])
+        t1,t2,t3,t4,t5,t6,t7,t8,t9 = st.tabs(["📊 Summary","📍 Locations","💡 Shifts","📦 PNOV","💰 Cost","🔬 Analysis","📈 Trend","📅 Distribution","💾 Export"])
         with t1:
             for n in names:
                 sdf = stations[n]
@@ -1208,15 +1165,15 @@ else:
         with t3:
             sel = st.selectbox("Dataset:", names, key="mcs"); render_opportunities_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"ms{sel}_")
         with t4:
-            sel = st.selectbox("Dataset:", names, key="mcc"); render_cost_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mc{sel}_")
+            sel = st.selectbox("Dataset:", names, key="mcp"); render_pnov_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mp{sel}_")
         with t5:
-            sel = st.selectbox("Dataset:", names, key="mca"); render_analysis_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"ma{sel}_")
+            sel = st.selectbox("Dataset:", names, key="mcc"); render_cost_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mc{sel}_")
         with t6:
-            sel = st.selectbox("Dataset:", names, key="mch"); render_heatmap_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mh{sel}_")
+            sel = st.selectbox("Dataset:", names, key="mca"); render_analysis_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"ma{sel}_")
         with t7:
             sel = st.selectbox("Dataset:", names, key="mct"); render_trend_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mt{sel}_")
         with t8:
-            sel = st.selectbox("Dataset:", names, key="mcd"); render_day_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"md{sel}_")
+            sel = st.selectbox("Dataset:", names, key="mcd"); render_distribution_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"md{sel}_")
         with t9:
             sel = st.selectbox("Dataset:", names, key="mce"); render_export_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"me{sel}_", station_name=sel)
     elif len(uploaded) == 1: st.warning("Need 2+ datasets to compare.")
