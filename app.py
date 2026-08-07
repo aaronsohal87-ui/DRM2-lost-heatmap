@@ -102,7 +102,6 @@ def clean_dsp_name(dsp_name):
     return str(dsp_name).strip()
 
 def find_stowed_by_column(df):
-    """Search dataframe columns for the stowed-by associate (login code like aarosoh)."""
     for candidate in STOWED_BY_CANDIDATES:
         if candidate in df.columns:
             non_null = df[candidate].dropna()
@@ -117,10 +116,7 @@ def find_stowed_by_column(df):
     return None
 
 def clean_scc(df):
-    """Clean SCC data — keep ALL columns (including Driver Id, Last Scan By, etc.)."""
-    # ONLY remove truly sensitive PII columns
     df = df.drop(columns=[c for c in SENSITIVE_COLS if c in df.columns])
-    # DO NOT drop Driver Id, Last Scan By, or any other operational columns
     for col in ["Package Length","Package Width","Package Height"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(r"\s*cm", "", regex=True), errors="coerce")
@@ -140,7 +136,6 @@ def clean_scc(df):
         df["City"] = df["City"].astype(str).str.strip().str.title().replace("Nan", pd.NA)
     if "DSP Name" in df.columns:
         df["DSP Name"] = df["DSP Name"].apply(clean_dsp_name)
-    # Find stowed-by column dynamically
     stow_col = find_stowed_by_column(df)
     if stow_col and stow_col != "Stowed By":
         df["Stowed By"] = df[stow_col]
@@ -166,7 +161,6 @@ def merge_data(pm_df, scc_df):
         pm_cols["Cost (£)"] = pd.to_numeric(pm_cols["shipment_value"].astype(str).str.replace("[£$,]", "", regex=True), errors="coerce")
     else:
         pm_cols["Cost (£)"] = 0.0
-    # Also search PM for stowed-by column
     pm_stow_col = find_stowed_by_column(pm_cols)
     if pm_stow_col:
         pm_cols["PM_Stowed_By"] = pm_cols[pm_stow_col]
@@ -185,7 +179,6 @@ def merge_data(pm_df, scc_df):
     merged["Shift"] = merged.apply(assign_shift, axis=1)
     merged["Driver Type"] = merged.get("DSP Name", pd.Series(dtype="object")).apply(
         lambda x: "Flex" if x == "FLEX DRIVER" else ("DSP" if pd.notna(x) else "Unknown"))
-    # Combine Stowed By from SCC and PM
     if "Stowed By" not in merged.columns:
         merged["Stowed By"] = None
     if "PM_Stowed_By" in merged.columns:
@@ -293,6 +286,8 @@ def render_summary_tab(df, total, dr, kp=""):
     if total == 0: st.warning("No data to display."); return
     with st.expander("🥧 OTR vs UTR"):
         st.pyplot(make_pie_otr_utr(df, total, f"OTR vs UTR ({dr})"))
+
+    # ─── CLUSTERS & LOCATION DRILL-DOWN (with Sort Zones) ─────────────────────
     with st.expander("📍 Clusters & Location Drill-Down", expanded=True):
         cc = df["Cluster"].dropna().value_counts()
         if len(cc) > 0:
@@ -306,36 +301,49 @@ def render_summary_tab(df, total, dr, kp=""):
                 shift_by_cluster = shift_by_cluster.reindex(top_clusters)
                 st.dataframe(shift_by_cluster, width="stretch")
             else:
+                # Location Drill-Down — Cluster → Aisle → Sort Zone
                 clusters = sorted(cc.index.tolist())
                 sel_cluster = st.selectbox("Select Cluster:", clusters, key=f"{kp}loc_drill")
                 filt = df[df["Cluster"] == sel_cluster]
                 st.write(f"**{len(filt)} parcels** in {sel_cluster} — {fmt_cost(filt['Cost (£)'].sum())}")
+                # Aisles bar chart
                 ad = filt["Aisle"].dropna().value_counts()
                 if len(ad) > 0:
                     st.pyplot(make_bar_horiz(ad, f"{sel_cluster} — By Aisle", color="steelblue"))
+                # Sort Zones below aisles
+                sz = filt["Sort Zone"].dropna().value_counts()
+                if len(sz) > 0:
+                    st.markdown("**By Sort Zone:**")
+                    st.pyplot(make_bar_horiz(sz, f"{sel_cluster} — By Sort Zone", color="purple"))
+                # Shift breakdown
                 st.markdown("**By Shift:**")
                 sd = filt[filt["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts().reindex(SHIFT_ORDER, fill_value=0)
                 st.pyplot(make_bar_shift(sd, f"{sel_cluster} — By Shift"))
-                col1, col2 = st.columns(2)
+                # Tables
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     if len(ad) > 0: st.dataframe(make_table(ad, "Aisle", "Count"), width="stretch")
                 with col2:
+                    if len(sz) > 0: st.dataframe(make_table(sz, "Sort Zone", "Count"), width="stretch")
+                with col3:
                     st.dataframe(make_table(sd, "Shift", "Count"), width="stretch")
         else:
             st.info("No cluster data available.")
+
+    # ─── SHIFTS (selectbox: table only for Windows, chart for Hours Lost) ─────
     with st.expander("⏰ Shifts", expanded=True):
         shift_view = st.selectbox("Show:", ["Shift Windows", "Hours Lost"], key=f"{kp}shift_view")
         if shift_view == "Shift Windows":
+            # Just ONE big table — no bar chart
             st.caption("NS: 23:45–09:45 | AM: 09:45–14:00 | PM: 14:00–23:45 | OTR: On The Road")
-            sc = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts()
             rows = []
             for s in SHIFT_ORDER:
                 sdf = df[df["Shift"]==s]; n = len(sdf)
-                rows.append({"Shift":s,"Lost":n,"%":f"{round(n/total*100,1)}%","Cost":fmt_cost(sdf["Cost (£)"].sum()),"Window":SHIFT_DEFINITIONS[s]})
+                rows.append({"Shift":s,"Lost":n,"% of Total":f"{round(n/total*100,1)}%","Cost":fmt_cost(sdf["Cost (£)"].sum()),"Window":SHIFT_DEFINITIONS[s]})
             rows.sort(key=lambda r:r["Lost"],reverse=True)
-            st.dataframe(pd.DataFrame(rows,index=range(1,len(rows)+1)),width="stretch",height=200)
-            if len(sc)>0: st.pyplot(make_bar_shift(sc,f"By Shift ({dr})"))
+            st.dataframe(pd.DataFrame(rows,index=range(1,len(rows)+1)),width="stretch",height=220)
         else:
+            # Hours Lost — bar chart
             st.caption("Uses previous_event_datetime — last scan before loss. Coloured by shift.")
             if "Prev Event DT" in df.columns:
                 hours = df["Prev Event DT"].dropna().dt.hour
@@ -358,6 +366,8 @@ def render_summary_tab(df, total, dr, kp=""):
                     st.warning("No valid previous_event_datetime data.")
             else:
                 st.info("No Prev Event DT column found.")
+
+    # ─── LOST SUB-BUCKET TITLE + COST ─────────────────────────────────────────
     with st.expander("🏷️ Lost Sub-Bucket Title + Cost"):
         sb2 = df["Sub Bucket"].dropna().value_counts()
         if len(sb2)>0:
@@ -368,8 +378,8 @@ def render_summary_tab(df, total, dr, kp=""):
             sb_cost.index = range(1, len(sb_cost)+1)
             st.dataframe(sb_cost, width="stretch")
             st.pyplot(make_bar_horiz(sb2, f"Lost Sub-Buckets ({dr})", color="teal"))
-        else:
-            st.info("No sub-bucket data.")
+
+    # ─── SIZE CATEGORY ────────────────────────────────────────────────────────
     with st.expander("📏 Lost Parcels by Size (Amazon UK FBA Tiers)"):
         sc_data = df["Size Category"].value_counts()
         if len(sc_data) > 0:
@@ -389,30 +399,33 @@ def render_summary_tab(df, total, dr, kp=""):
                 st.caption("Longest side: Small Envelope ≤20cm | Std Envelope ≤33cm | Std Parcel ≤45cm | Small Oversize ≤61cm | Std Oversize ≤120cm | Large Oversize >120cm")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# LOCATIONS TAB (UTR / OTR only — no "All")
+# LOCATIONS TAB (UTR / OTR only)
 # ═══════════════════════════════════════════════════════════════════════════════
 def render_locations_tab(df, total, dr, kp=""):
     if total == 0: st.warning("No data."); return
     lf = st.radio("Show:", ["UTR Only","OTR Only"], horizontal=True, key=f"{kp}lf")
     if lf == "OTR Only":
         vdf = df[df["Type"]=="OTR"].copy()
-        st.write(f"**{len(vdf)} OTR** — {fmt_cost(vdf['Cost (£)'].sum())}")
-        if len(vdf)==0: st.info("No OTR parcels."); return
+        otr_total = len(vdf)
+        st.write(f"**{otr_total} OTR parcels** — {fmt_cost(vdf['Cost (£)'].sum())}")
+        if otr_total==0: st.info("No OTR parcels."); return
         with st.expander("🚚 Worst 10 DSPs", expanded=True):
             d = vdf["DSP Name"].dropna().value_counts().head(10)
-            if len(d)>0: st.pyplot(make_bar_horiz(d,f"Worst 10 DSPs — OTR ({dr})",color="firebrick",max_label=DSP_MAX))
+            if len(d)>0: st.pyplot(make_bar_horiz(d,f"Worst 10 DSPs — OTR [{otr_total} total] ({dr})",color="firebrick",max_label=DSP_MAX))
         with st.expander("📍 Worst 10 Delivery Areas"):
+            st.caption(f"All charts below are from the same {otr_total} OTR parcels.")
             ab = st.radio("By:",["City","Province","Postal"],horizontal=True,key=f"{kp}oa")
             if ab in vdf.columns:
                 ad = vdf[ab].dropna().value_counts().head(10)
-                if len(ad)>0: st.pyplot(make_bar_horiz(ad,f"Worst 10 {ab} — OTR ({dr})",color="darkred"))
+                if len(ad)>0: st.pyplot(make_bar_horiz(ad,f"Worst 10 {ab} — OTR [{otr_total} total] ({dr})",color="darkred"))
         with st.expander("❓ Worst 10 Loss Reasons"):
             r = vdf["Loss Reason"].dropna().value_counts().head(10)
-            if len(r)>0: st.pyplot(make_bar_horiz(r,"Worst 10 OTR Reasons",color="crimson"))
+            if len(r)>0: st.pyplot(make_bar_horiz(r,f"Worst 10 OTR Reasons [{otr_total} total]",color="crimson"))
     else:
         vdf = df[df["Type"]=="UTR"].copy()
-        st.write(f"**{len(vdf)} UTR** — {fmt_cost(vdf['Cost (£)'].sum())}")
-        if len(vdf)==0: st.info("No UTR parcels."); return
+        utr_total = len(vdf)
+        st.write(f"**{utr_total} UTR parcels** — {fmt_cost(vdf['Cost (£)'].sum())}")
+        if utr_total==0: st.info("No UTR parcels."); return
         with st.expander("📍 Worst 10 Clusters", expanded=True):
             cl = vdf["Cluster"].dropna().value_counts().head(10)
             if len(cl)>0: st.pyplot(make_bar_horiz(cl,f"Worst 10 Clusters — UTR ({dr})",color="darkorange"))
@@ -422,16 +435,30 @@ def render_locations_tab(df, total, dr, kp=""):
         with st.expander("🗂️ Worst 10 Sort Zones"):
             sz = vdf["Sort Zone"].dropna().value_counts().head(10)
             if len(sz)>0: st.pyplot(make_bar_horiz(sz,f"Worst 10 Sort Zones — UTR ({dr})",color="purple"))
+        with st.expander("❓ Worst 10 Loss Reasons"):
+            r = vdf["Loss Reason"].dropna().value_counts().head(10)
+            if len(r)>0: st.pyplot(make_bar_horiz(r,f"Worst 10 Loss Reasons — UTR ({dr})",color="coral"))
+        with st.expander("⏰ Shifts That Did It"):
+            st.caption("Which shifts were UTR losses attributed to:")
+            shift_counts = vdf[vdf["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts().reindex(SHIFT_ORDER, fill_value=0)
+            shift_tbl = pd.DataFrame({
+                "Shift": SHIFT_ORDER,
+                "UTR Losses": [int(shift_counts[s]) for s in SHIFT_ORDER],
+                "% of UTR": [f"{round(shift_counts[s]/utr_total*100,1)}%" if utr_total>0 else "0%" for s in SHIFT_ORDER],
+                "Window": [SHIFT_DEFINITIONS[s] for s in SHIFT_ORDER]
+            })
+            shift_tbl.index = range(1,5)
+            st.dataframe(shift_tbl, width="stretch")
         with st.expander("🏷️ Sub Buckets"):
             sb = vdf["Sub Bucket"].dropna().value_counts()
             if len(sb)>0: st.pyplot(make_bar_horiz(sb,"UTR Sub Buckets",color="darkorange"))
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PNOV TAB
+# PNOV TAB (associates removed — not possible with current data)
 # ═══════════════════════════════════════════════════════════════════════════════
 def render_pnov_tab(df, total, dr, kp=""):
     st.markdown("#### 📦 PNOV — Package Not On Vehicle")
-    st.caption("Identifies DSPs/Flex drivers + Driver IDs + associates who stowed (for upskilling).")
+    st.caption("Identifies DSPs/Flex drivers + Driver IDs responsible for PNOV losses.")
     pnov_keywords = ["PNOV", "No Further Status", "Package Not On Vehicle"]
     pnov_mask = df["Sub Bucket"].fillna("").apply(lambda x: any(k.lower() in str(x).lower() for k in pnov_keywords))
     pnov_df = df[pnov_mask].copy()
@@ -447,7 +474,6 @@ def render_pnov_tab(df, total, dr, kp=""):
     with st.expander("🚚 Responsible Drivers (DSP + Driver ID)", expanded=True):
         dsp_data = pnov_df.dropna(subset=["DSP Name"])
         if len(dsp_data) > 0:
-            # Build table with DSP Name AND Driver Id
             has_driver_id = "Driver Id" in dsp_data.columns and dsp_data["Driver Id"].notna().any()
             if has_driver_id:
                 tbl = dsp_data.groupby(["DSP Name","Driver Id"]).agg(
@@ -463,8 +489,6 @@ def render_pnov_tab(df, total, dr, kp=""):
                 ).sort_values("Count", ascending=False).reset_index()
                 tbl["Cost"] = tbl["Cost"].apply(fmt_cost); tbl.index = range(1, len(tbl)+1)
                 st.dataframe(tbl, width="stretch")
-                st.caption("No Driver Id column found in SCC — only DSP names shown.")
-            # Chart
             dc = dsp_data["DSP Name"].value_counts()
             st.pyplot(make_bar_horiz(dc, f"PNOV by Driver ({dr})", color="firebrick", max_label=DSP_MAX))
             # Flex vs DSP
@@ -480,35 +504,11 @@ def render_pnov_tab(df, total, dr, kp=""):
         else:
             st.warning("No driver data for PNOV parcels.")
 
-    with st.expander("👤 Associates — Stowed By (Upskilling List)", expanded=True):
-        st.caption("Associate login code (e.g. 'aarosoh') who last stowed/scanned before loss. Use for upskilling.")
-        has_stowed = pnov_df["Stowed By"].dropna()
-        if len(has_stowed) > 0:
-            assoc_counts = has_stowed.value_counts()
-            st.markdown(f"**{len(assoc_counts)} associate(s)** involved:")
-            assoc_tbl = pnov_df[pnov_df["Stowed By"].notna()].groupby("Stowed By").agg(
-                Parcels=("Tracking ID", "count"),
-                Cost=("Cost (£)", "sum"),
-                Clusters=("Cluster", lambda x: ", ".join(sorted(x.dropna().unique()[:3]))),
-                Sub_Buckets=("Sub Bucket", lambda x: ", ".join(sorted(x.dropna().unique()[:2])))
-            ).sort_values("Parcels", ascending=False).reset_index()
-            assoc_tbl["Cost"] = assoc_tbl["Cost"].apply(fmt_cost)
-            assoc_tbl.index = range(1, len(assoc_tbl)+1)
-            st.dataframe(assoc_tbl, width="stretch")
-            st.download_button("⬇️ Download upskilling list", assoc_tbl.to_csv(index=False), "PNOV_upskilling.csv", "text/csv", key=f"{kp}dl_upskill")
-        else:
-            st.warning("No 'Stowed By' data found.")
-            st.info("**How to get this:** SCC export needs 'Stowed By', 'Last Scan By', or similar column with associate login codes.")
-            with st.expander("🔧 All columns found in your data (for debugging)"):
-                all_cols = sorted(df.columns.tolist())
-                st.write("These columns were available after merge:")
-                st.code(", ".join(all_cols))
-
     with st.expander("📍 PNOV by Cluster"):
         cl = pnov_df["Cluster"].dropna().value_counts()
         if len(cl) > 0: st.pyplot(make_bar_horiz(cl.head(15), f"PNOV by Cluster ({dr})", color="purple"))
     with st.expander("📋 All PNOV Tracking IDs"):
-        tid_cols = [c for c in ["Tracking ID","Cluster","Aisle","DSP Name","Driver Id","Driver Type","Stowed By","Cost (£)","Loss Reason"] if c in pnov_df.columns]
+        tid_cols = [c for c in ["Tracking ID","Cluster","Aisle","DSP Name","Driver Id","Driver Type","Cost (£)","Loss Reason"] if c in pnov_df.columns]
         tid_df = pnov_df[tid_cols].reset_index(drop=True)
         tid_df.index = range(1, len(tid_df)+1)
         st.dataframe(tid_df, width="stretch", height=400)
@@ -546,46 +546,38 @@ def render_cost_tab(df, total, dr, kp=""):
         sz_cost["% of Cost"] = (sz_cost["Cost"] / tc * 100).round(1) if tc > 0 else 0
         sz_cost["Cost"] = sz_cost["Cost"].apply(fmt_cost); sz_cost.index = range(1, len(sz_cost)+1)
         st.dataframe(sz_cost, width="stretch")
-    with st.expander("💰 Worst 10 Most Expensive Parcels"):
+    with st.expander("💰 Top 10 Most Expensive Parcels"):
         top = df.nlargest(10,"Cost (£)")
         sc2 = [c for c in ["Tracking ID","Sub Bucket","Type","Shift","Cost (£)","DSP Name","Cluster","Loss Reason","Size Category"] if c in top.columns]
         out = top[sc2].reset_index(drop=True); out.index = range(1,len(out)+1); st.dataframe(out,width="stretch")
-    with st.expander("💰 Flex vs DSP Cost"):
-        flex_df = df[df["Driver Type"]=="Flex"]; dsp_only = df[df["Driver Type"]=="DSP"]
-        col1, col2 = st.columns(2)
-        with col1: st.metric("Flex", f"{len(flex_df)} parcels — {fmt_cost(flex_df['Cost (£)'].sum())}")
-        with col2: st.metric("DSP", f"{len(dsp_only)} parcels — {fmt_cost(dsp_only['Cost (£)'].sum())}")
+    with st.expander("💰 Flex vs DSP Cost (OTR only)"):
+        st.caption("⚠️ Only OTR (road) losses shown. UTR losses are station-side and don't have a DSP.")
+        otr_only = df[df["Type"]=="OTR"]
+        if len(otr_only) > 0:
+            flex_otr = otr_only[otr_only["Driver Type"]=="Flex"]
+            dsp_otr = otr_only[otr_only["Driver Type"]=="DSP"]
+            col1, col2 = st.columns(2)
+            with col1: st.metric("Flex (OTR)", f"{len(flex_otr)} parcels — {fmt_cost(flex_otr['Cost (£)'].sum())}")
+            with col2: st.metric("DSP (OTR)", f"{len(dsp_otr)} parcels — {fmt_cost(dsp_otr['Cost (£)'].sum())}")
+            st.caption(f"Total OTR: {len(otr_only)} | UTR losses ({len(utr_df)}) don't appear here — they have no DSP.")
+        else:
+            st.info("No OTR parcels to compare.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# FOCUS TAB (new)
+# FOCUS TAB (simplified — no Associate, bullet points explaining value)
 # ═══════════════════════════════════════════════════════════════════════════════
 def render_focus_tab(df, total, dr, kp=""):
     if total == 0: st.warning("No data."); return
     st.markdown("### 🎯 Focus — Deep Dive into a Metric")
-    st.caption("Select a metric to see everything about it in one place.")
-    metric = st.selectbox("Focus on:", ["Associate / Stowed By", "Cluster", "DSP", "Aisle", "Shift", "Sub Bucket", "Size Category"], key=f"{kp}focus_metric")
+    st.markdown("""
+**What does Focus add over other tabs?**
+- Gives you **everything about ONE metric** in one place — full table, worst performers, and cross-references
+- Shows relationships other tabs don't (e.g. which aisles are in which clusters, which DSPs lose which sub-buckets)
+- Use it when you've identified a problem area in Summary/Locations and want to **go deeper**
+""")
+    metric = st.selectbox("Focus on:", ["Cluster", "DSP", "Aisle", "Shift", "Sub Bucket", "Size Category"], key=f"{kp}focus_metric")
 
-    if metric == "Associate / Stowed By":
-        has_stowed = df["Stowed By"].dropna()
-        if len(has_stowed) == 0:
-            st.warning("No 'Stowed By' data in this dataset. SCC needs 'Stowed By' or 'Last Scan By' column.")
-            return
-        assoc_counts = has_stowed.value_counts()
-        st.markdown(f"**{len(assoc_counts)} associates** found")
-        # Full breakdown table
-        atbl = df[df["Stowed By"].notna()].groupby("Stowed By").agg(
-            Parcels=("Tracking ID","count"), Cost=("Cost (£)","sum"),
-            Clusters=("Cluster", lambda x: ", ".join(sorted(x.dropna().unique()[:3]))),
-            Sub_Buckets=("Sub Bucket", lambda x: ", ".join(sorted(x.dropna().unique()[:3]))),
-            Shifts=("Shift", lambda x: ", ".join(sorted(x.dropna().unique())))
-        ).sort_values("Parcels", ascending=False).reset_index()
-        atbl["% of Total"] = (atbl["Parcels"] / total * 100).round(1)
-        atbl["Cost"] = atbl["Cost"].apply(fmt_cost); atbl.index = range(1, len(atbl)+1)
-        st.dataframe(atbl, width="stretch")
-        st.pyplot(make_bar_horiz(assoc_counts.head(10), "Worst 10 Associates (by parcel count)", color="darkred"))
-        st.download_button("⬇️ Download upskilling list", atbl.to_csv(index=False), "upskilling_all.csv", "text/csv", key=f"{kp}dl_focus_assoc")
-
-    elif metric == "Cluster":
+    if metric == "Cluster":
         cc = df["Cluster"].dropna().value_counts()
         if len(cc) == 0: st.info("No cluster data."); return
         ctbl = df.dropna(subset=["Cluster"]).groupby("Cluster").agg(
@@ -597,7 +589,6 @@ def render_focus_tab(df, total, dr, kp=""):
         ctbl["Cost"] = ctbl["Cost"].apply(fmt_cost); ctbl.index = range(1, len(ctbl)+1)
         st.dataframe(ctbl, width="stretch")
         st.pyplot(make_bar_horiz(cc.head(10), "Worst 10 Clusters", color="steelblue"))
-        # Drill into specific cluster
         sel = st.selectbox("Drill into cluster:", sorted(cc.index.tolist()), key=f"{kp}focus_cl")
         filt = df[df["Cluster"]==sel]
         st.write(f"**{sel}:** {len(filt)} parcels, {fmt_cost(filt['Cost (£)'].sum())}")
@@ -610,7 +601,6 @@ def render_focus_tab(df, total, dr, kp=""):
         dsp_data = df.dropna(subset=["DSP Name"])
         if len(dsp_data)==0: st.info("No DSP data."); return
         dc = dsp_data["DSP Name"].value_counts()
-        # Table with Driver IDs and loss reasons
         has_did = "Driver Id" in dsp_data.columns and dsp_data["Driver Id"].notna().any()
         if has_did:
             dtbl = dsp_data.groupby("DSP Name").agg(
@@ -681,8 +671,121 @@ def render_focus_tab(df, total, dr, kp=""):
         st.pyplot(make_bar_horiz(sc_ordered, "By Size Category"))
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ANALYSIS & TREND TAB (combined, detailed)
+# ANALYSIS & TREND TAB
 # ═══════════════════════════════════════════════════════════════════════════════
+def run_analysis(df, total, dr, kp=""):
+    """Run the full analysis — used both for single-week and multi-week combined."""
+    actions = []
+    tc = df["Cost (£)"].sum()
+
+    with st.expander("📊 Loss Reasons", expanded=True):
+        lr = df.groupby("Loss Reason").agg(Count=("Tracking ID","count"), Cost=("Cost (£)","sum")).sort_values("Cost", ascending=False).reset_index()
+        if len(lr) > 0:
+            lr["% of Total"] = (lr["Count"] / total * 100).round(1).astype(str) + "%"
+            lr["Avg £"] = (lr["Cost"] / lr["Count"]).apply(fmt_cost)
+            lr_disp = lr.copy(); lr_disp["Cost"] = lr_disp["Cost"].apply(fmt_cost)
+            lr_disp.index = range(1, len(lr_disp)+1)
+            st.dataframe(lr_disp, width="stretch")
+            top3_lr = lr.head(3)
+            st.markdown("**Top 3 reasons by cost:**")
+            for _, row in top3_lr.iterrows():
+                st.markdown(f"- **{row['Loss Reason']}**: {int(row['Count'])} parcels, {fmt_cost(row['Cost'])}")
+            actions.append(f"Investigate '{top3_lr.iloc[0]['Loss Reason']}' ({int(top3_lr.iloc[0]['Count'])} parcels, {fmt_cost(top3_lr.iloc[0]['Cost'])})")
+
+    with st.expander("📍 Cluster Concentration", expanded=True):
+        cl_c = df["Cluster"].dropna().value_counts()
+        if len(cl_c) >= 2:
+            top5 = cl_c.head(5)
+            top5_pct = round(top5.sum() / cl_c.sum() * 100, 1)
+            top5_cost = df[df["Cluster"].isin(top5.index)]["Cost (£)"].sum()
+            vals = cl_c.values.astype(float); n = len(vals); sv = np.sort(vals)
+            denom = n * np.sum(sv)
+            gini = (2 * np.sum(np.arange(1, n+1) * sv) - (n+1) * np.sum(sv)) / denom if denom > 0 else 0
+            if gini > 0.5: st.error(f"🎯 HIGHLY concentrated. Top 5 = **{top5_pct}%** of losses.")
+            elif gini > 0.3: st.warning(f"⚠️ Moderately concentrated. Top 5 = **{top5_pct}%**.")
+            else: st.success(f"✅ Fairly spread. Top 5 = {top5_pct}%.")
+            st.markdown("**Clusters to focus on:**")
+            for cluster_name, count in top5.items():
+                cost = df[df["Cluster"]==cluster_name]["Cost (£)"].sum()
+                pct = round(count / cl_c.sum() * 100, 1)
+                st.markdown(f"- **{cluster_name}**: {int(count)} parcels ({pct}%), {fmt_cost(cost)}")
+            actions.append(f"Walk clusters {', '.join(top5.index[:3])} — they account for {top5_pct}% of losses")
+
+    with st.expander("⏰ Shift Imbalance"):
+        shift_counts = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts().reindex(SHIFT_ORDER, fill_value=0)
+        assigned = shift_counts.sum()
+        if assigned >= 10:
+            expected_per = assigned / 4
+            worst_shift = shift_counts.idxmax(); worst_count = int(shift_counts.max())
+            over_by = int(worst_count - expected_per)
+            st.markdown(f"**Worst shift: {worst_shift}** — {worst_count} parcels (expected ~{int(expected_per)}, over by {over_by})")
+            st.markdown(f"Window: {SHIFT_DEFINITIONS[worst_shift]}")
+            for s in SHIFT_ORDER:
+                diff = int(shift_counts[s] - expected_per)
+                marker = "🔴" if diff > expected_per*0.3 else "🟢"
+                st.markdown(f"  {marker} {s}: {int(shift_counts[s])} (expected ~{int(expected_per)}, {'+'if diff>=0 else ''}{diff})")
+            if over_by > expected_per * 0.3:
+                actions.append(f"Investigate {worst_shift} shift ({worst_count} losses, {over_by} above expected)")
+
+    with st.expander("🚚 DSP Outliers"):
+        otr = df[df["Type"] == "OTR"]
+        if len(otr) >= 5:
+            dc = otr["DSP Name"].dropna().value_counts()
+            if len(dc) >= 3:
+                mu = dc.mean(); sigma = dc.std()
+                if sigma > 0:
+                    z = (dc - mu) / sigma
+                    outliers = z[z > 1.5]
+                    tbl = pd.DataFrame({"DSP": dc.index, "Losses": dc.values, "Z-Score": z.values.round(2), "Status": ["🎯 OUTLIER" if zv > 1.5 else "✅ Normal" for zv in z.values]})
+                    tbl.index = range(1, len(tbl)+1); st.dataframe(tbl, width="stretch")
+                    if len(outliers) > 0:
+                        st.error(f"🎯 {len(outliers)} DSP(s) significantly above average (avg={mu:.1f}):")
+                        for dsp_name in outliers.index:
+                            cost = otr[otr["DSP Name"]==dsp_name]["Cost (£)"].sum()
+                            st.markdown(f"- **{dsp_name}**: {int(dc[dsp_name])} losses ({fmt_cost(cost)})")
+                            actions.append(f"Escalate {dsp_name} — {int(dc[dsp_name])} OTR losses ({fmt_cost(cost)})")
+                    else:
+                        st.success("✅ No statistical outliers among DSPs.")
+
+    with st.expander("📏 Size Over-Representation"):
+        szc = df["Size Category"].value_counts()
+        if len(szc) >= 2:
+            oversize_cats = ["Small Oversize","Standard Oversize","Large Oversize"]
+            ov = sum(szc.get(k,0) for k in oversize_cats)
+            ov_pct = round(ov / total * 100, 1)
+            worst_size = szc.idxmax(); worst_size_n = int(szc.max())
+            st.markdown(f"**Most lost size: {worst_size}** — {worst_size_n} parcels ({round(worst_size_n/total*100,1)}%)")
+            st.markdown(f"**Oversized parcels:** {ov} ({ov_pct}%)")
+            if ov_pct > 30:
+                st.error(f"🎯 Oversized = {ov_pct}% — well above normal (~15-20%)")
+                actions.append(f"Check oversize stow process — {ov_pct}% of losses are oversize")
+            elif ov_pct > 20:
+                st.warning(f"⚠️ Oversized slightly elevated at {ov_pct}%")
+            else:
+                st.success(f"✅ Oversized at {ov_pct}% — normal range")
+
+    with st.expander("🔁 Repeat Offender Aisles"):
+        aisle_c = df["Aisle"].dropna().value_counts()
+        repeat = aisle_c[aisle_c >= 3]
+        if len(repeat) > 0:
+            st.error(f"🎯 {len(repeat)} aisle(s) lost 3+ parcels:")
+            for aisle_name, count in repeat.head(5).items():
+                cost = df[df["Aisle"]==aisle_name]["Cost (£)"].sum()
+                cluster_series = df[df["Aisle"]==aisle_name]["Cluster"].dropna()
+                cluster = cluster_series.mode().iloc[0] if len(cluster_series)>0 else "Unknown"
+                st.markdown(f"- **{aisle_name}** (Cluster {cluster}): {int(count)} parcels, {fmt_cost(cost)}")
+            actions.append(f"Walk aisle {repeat.index[0]} — {int(repeat.iloc[0])} losses")
+        else:
+            st.success("✅ No single aisle has 3+ losses.")
+
+    if actions:
+        st.markdown("---")
+        st.markdown("#### 📋 Suggested Action List")
+        st.caption("Based on data patterns. Prioritise using local knowledge.")
+        for i, a in enumerate(actions, 1):
+            st.markdown(f"**{i}.** {a}")
+
+
 def render_analysis_trend_tab(df, total, dr, kp=""):
     if total == 0: st.warning("No data."); return
     view = st.selectbox("View:", ["🔬 Analysis", "📈 Trend"], key=f"{kp}at_view")
@@ -690,132 +793,7 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
     if view == "🔬 Analysis":
         st.markdown("### 🔬 Analysis — Detailed Findings")
         st.warning("⚠️ An AID only — use your own judgement and local knowledge.")
-        actions = []
-        tc = df["Cost (£)"].sum()
-
-        # 1. Loss Reasons — top 3
-        with st.expander("📊 Loss Reasons", expanded=True):
-            lr = df.groupby("Loss Reason").agg(Count=("Tracking ID","count"), Cost=("Cost (£)","sum")).sort_values("Cost", ascending=False).reset_index()
-            if len(lr) > 0:
-                lr["% of Total"] = (lr["Count"] / total * 100).round(1).astype(str) + "%"
-                lr["Avg £"] = (lr["Cost"] / lr["Count"]).apply(fmt_cost)
-                lr_disp = lr.copy(); lr_disp["Cost"] = lr_disp["Cost"].apply(fmt_cost)
-                lr_disp.index = range(1, len(lr_disp)+1)
-                st.dataframe(lr_disp, width="stretch")
-                top3_lr = lr.head(3)
-                st.markdown("**Top 3 reasons by cost:**")
-                for _, row in top3_lr.iterrows():
-                    st.markdown(f"- **{row['Loss Reason']}**: {int(row['Count'])} parcels, {fmt_cost(row['Cost'])}")
-                actions.append(f"Investigate top loss reason '{top3_lr.iloc[0]['Loss Reason']}' ({int(top3_lr.iloc[0]['Count'])} parcels, {fmt_cost(top3_lr.iloc[0]['Cost'])})")
-
-        # 2. Cluster Concentration — NAME the clusters
-        with st.expander("📍 Cluster Concentration", expanded=True):
-            cl_c = df["Cluster"].dropna().value_counts()
-            if len(cl_c) >= 2:
-                top5 = cl_c.head(5)
-                top5_pct = round(top5.sum() / cl_c.sum() * 100, 1)
-                top5_cost = df[df["Cluster"].isin(top5.index)]["Cost (£)"].sum()
-                vals = cl_c.values.astype(float); n = len(vals); sv = np.sort(vals)
-                denom = n * np.sum(sv)
-                gini = (2 * np.sum(np.arange(1, n+1) * sv) - (n+1) * np.sum(sv)) / denom if denom > 0 else 0
-                if gini > 0.5: st.error(f"🎯 HIGHLY concentrated. Top 5 = **{top5_pct}%** of losses.")
-                elif gini > 0.3: st.warning(f"⚠️ Moderately concentrated. Top 5 = **{top5_pct}%**.")
-                else: st.success(f"✅ Fairly spread. Top 5 = {top5_pct}%.")
-                st.markdown("**Clusters to focus on:**")
-                for cluster_name, count in top5.items():
-                    cost = df[df["Cluster"]==cluster_name]["Cost (£)"].sum()
-                    pct = round(count / cl_c.sum() * 100, 1)
-                    st.markdown(f"- **{cluster_name}**: {int(count)} parcels ({pct}%), {fmt_cost(cost)}")
-                actions.append(f"Walk clusters {', '.join(top5.index[:3])} — they account for {top5_pct}% of losses")
-            else:
-                st.info("Not enough cluster data.")
-
-        # 3. Shift Imbalance
-        with st.expander("⏰ Shift Imbalance"):
-            shift_counts = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"].value_counts().reindex(SHIFT_ORDER, fill_value=0)
-            assigned = shift_counts.sum()
-            if assigned >= 10:
-                expected_per = assigned / 4
-                worst_shift = shift_counts.idxmax(); worst_count = int(shift_counts.max())
-                over_by = int(worst_count - expected_per)
-                st.markdown(f"**Worst shift: {worst_shift}** — {worst_count} parcels (expected ~{int(expected_per)}, over by {over_by})")
-                st.markdown(f"Window: {SHIFT_DEFINITIONS[worst_shift]}")
-                for s in SHIFT_ORDER:
-                    diff = int(shift_counts[s] - expected_per)
-                    marker = "🔴" if diff > expected_per*0.3 else "🟢"
-                    st.markdown(f"  {marker} {s}: {int(shift_counts[s])} (expected ~{int(expected_per)}, {'+'if diff>=0 else ''}{diff})")
-                if over_by > expected_per * 0.3:
-                    actions.append(f"Investigate {worst_shift} shift ({worst_count} losses, {over_by} above expected)")
-            else:
-                st.info(f"Need 10+ parcels with shift data (have {assigned}).")
-
-        # 4. DSP Outliers — name them
-        with st.expander("🚚 DSP Outliers"):
-            otr = df[df["Type"] == "OTR"]
-            if len(otr) >= 5:
-                dc = otr["DSP Name"].dropna().value_counts()
-                if len(dc) >= 3:
-                    mu = dc.mean(); sigma = dc.std()
-                    if sigma > 0:
-                        z = (dc - mu) / sigma
-                        outliers = z[z > 1.5]
-                        tbl = pd.DataFrame({"DSP": dc.index, "Losses": dc.values, "Z-Score": z.values.round(2), "Status": ["🎯 OUTLIER" if zv > 1.5 else "✅ Normal" for zv in z.values]})
-                        tbl.index = range(1, len(tbl)+1); st.dataframe(tbl, width="stretch")
-                        if len(outliers) > 0:
-                            st.error(f"🎯 {len(outliers)} DSP(s) significantly above average (avg={mu:.1f}):")
-                            for dsp_name in outliers.index:
-                                cost = otr[otr["DSP Name"]==dsp_name]["Cost (£)"].sum()
-                                st.markdown(f"- **{dsp_name}**: {int(dc[dsp_name])} losses ({fmt_cost(cost)})")
-                                actions.append(f"Escalate {dsp_name} — {int(dc[dsp_name])} OTR losses ({fmt_cost(cost)})")
-                        else:
-                            st.success("✅ No statistical outliers among DSPs.")
-                    else:
-                        st.info("Not enough variation.")
-                else:
-                    st.info("Need 3+ DSPs.")
-            else:
-                st.info(f"Need 5+ OTR parcels (have {len(otr)}).")
-
-        # 5. Size over-representation
-        with st.expander("📏 Size Over-Representation"):
-            szc = df["Size Category"].value_counts()
-            if len(szc) >= 2:
-                oversize_cats = ["Small Oversize","Standard Oversize","Large Oversize"]
-                ov = sum(szc.get(k,0) for k in oversize_cats)
-                ov_pct = round(ov / total * 100, 1)
-                worst_size = szc.idxmax(); worst_size_n = int(szc.max())
-                st.markdown(f"**Most lost size category: {worst_size}** — {worst_size_n} parcels ({round(worst_size_n/total*100,1)}%)")
-                st.markdown(f"**Oversized parcels:** {ov} ({ov_pct}%)")
-                if ov_pct > 30:
-                    st.error(f"🎯 Oversized = {ov_pct}% — well above normal (~15-20%)")
-                    actions.append(f"Check oversize stow process — {ov_pct}% of losses are oversize")
-                elif ov_pct > 20:
-                    st.warning(f"⚠️ Oversized slightly elevated at {ov_pct}%")
-                else:
-                    st.success(f"✅ Oversized at {ov_pct}% — normal range")
-                st.dataframe(pd.DataFrame({"Size":szc.index,"Count":szc.values,"% of Losses":(szc.values/total*100).round(1)}, index=range(1,len(szc)+1)), width="stretch")
-
-        # 6. Repeat aisles
-        with st.expander("🔁 Repeat Offender Aisles"):
-            aisle_c = df["Aisle"].dropna().value_counts()
-            repeat = aisle_c[aisle_c >= 3]
-            if len(repeat) > 0:
-                st.error(f"🎯 {len(repeat)} aisle(s) lost 3+ parcels:")
-                for aisle_name, count in repeat.head(5).items():
-                    cost = df[df["Aisle"]==aisle_name]["Cost (£)"].sum()
-                    cluster = df[df["Aisle"]==aisle_name]["Cluster"].mode().iloc[0] if len(df[df["Aisle"]==aisle_name]["Cluster"].dropna())>0 else "Unknown"
-                    st.markdown(f"- **{aisle_name}** (Cluster {cluster}): {int(count)} parcels, {fmt_cost(cost)}")
-                actions.append(f"Walk aisle {repeat.index[0]} — {int(repeat.iloc[0])} losses")
-            else:
-                st.success("✅ No single aisle has 3+ losses.")
-
-        # Action list
-        if actions:
-            st.markdown("---")
-            st.markdown("#### 📋 Suggested Action List")
-            st.caption("Based on data patterns. Prioritise using local knowledge.")
-            for i, a in enumerate(actions, 1):
-                st.markdown(f"**{i}.** {a}")
+        run_analysis(df, total, dr, kp)
 
     else:
         # TREND — three input modes
@@ -836,9 +814,10 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
             _render_trend_chart(weeks_data, kp)
 
         elif trend_mode == "📂 Upload CSVs only":
-            st.caption("Upload one PM CSV per week. Count is taken from number of rows.")
+            st.caption("Upload one PM CSV per week. Count = number of rows. Optionally run analysis across all weeks combined.")
             num_files = st.slider("How many weeks?", 1, 12, 4, key=f"{kp}nf")
             weeks_data = []
+            uploaded_dfs = []
             for i in range(num_files):
                 col1, col2 = st.columns([1, 3])
                 with col1:
@@ -849,10 +828,39 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
                     try:
                         wdf = pd.read_csv(f_up)
                         weeks_data.append({"Week": wk_label, "Total": len(wdf)})
+                        uploaded_dfs.append(wdf)
                         st.caption(f"  → {wk_label}: {len(wdf)} parcels")
                     except Exception as e:
                         st.error(f"Error reading {wk_label}: {e}")
             _render_trend_chart(weeks_data, kp)
+
+            # Analysis over time — run analysis on combined CSVs
+            if len(uploaded_dfs) >= 2:
+                st.markdown("---")
+                if st.checkbox("🔬 Run analysis across all weeks (combined dataset)", key=f"{kp}multi_analysis"):
+                    combined_pm = pd.concat(uploaded_dfs, ignore_index=True)
+                    combined_total = len(combined_pm)
+                    st.markdown(f"### 🔬 Analysis Across All Weeks ({combined_total} parcels combined)")
+                    st.caption("This shows patterns that PERSIST across weeks — not one-offs.")
+                    # We can only do PM-level analysis (no SCC merge here)
+                    # But we can still do sub-bucket, loss reason analysis
+                    if "sub_bucket" in combined_pm.columns:
+                        combined_pm["Type"] = combined_pm["sub_bucket"].apply(classify_otr_utr)
+                        combined_pm["Shift"] = combined_pm.apply(assign_shift, axis=1)
+                        sb_counts = combined_pm["sub_bucket"].dropna().value_counts()
+                        st.markdown("**Sub-Bucket patterns across all weeks:**")
+                        sb_tbl = sb_counts.head(10).reset_index()
+                        sb_tbl.columns = ["Sub Bucket", "Total Across Weeks"]
+                        sb_tbl.index = range(1, len(sb_tbl)+1)
+                        st.dataframe(sb_tbl, width="stretch")
+                    if "previous_reason" in combined_pm.columns:
+                        lr = combined_pm["previous_reason"].replace({"NOREASON":"No Reason","NONE":"No Reason"}).fillna("Unknown").value_counts()
+                        st.markdown("**Persistent loss reasons:**")
+                        lr_tbl = lr.head(5).reset_index()
+                        lr_tbl.columns = ["Loss Reason", "Total Across Weeks"]
+                        lr_tbl.index = range(1, len(lr_tbl)+1)
+                        st.dataframe(lr_tbl, width="stretch")
+                    st.info("💡 For full cluster/aisle/DSP analysis over time, upload the same SCC data merged with each week's PM in Single Station mode.")
 
         else:  # Mix
             st.caption("For each week, either upload a CSV OR type the total manually.")
@@ -878,7 +886,6 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
             _render_trend_chart(weeks_data, kp)
 
 def _render_trend_chart(weeks_data, kp=""):
-    """Render trend chart from collected weeks data."""
     if len(weeks_data) >= 2:
         weekly = pd.DataFrame(weeks_data)
         fig, ax = plt.subplots(figsize=(7, 3))
@@ -899,8 +906,6 @@ def _render_trend_chart(weeks_data, kp=""):
         st.download_button("⬇️ Download trend", weekly.to_csv(index=False), "weekly_trend.csv", "text/csv", key=f"{kp}dl_trend")
     elif len(weeks_data) == 1:
         st.info("Need at least 2 weeks to show a trend.")
-    else:
-        st.info("Enter or upload data for at least 2 weeks.")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # EXPORT TAB
@@ -951,8 +956,8 @@ def render_guide():
 | Tab | What it tells you |
 |-----|------------------|
 | 📊 **Summary** | Clusters, shifts/hours, sub-buckets + cost, size |
-| 📍 **Locations** | Worst 10s — UTR clusters/aisles, OTR DSPs/areas |
-| 📦 **PNOV** | Drivers + Driver IDs + associates for upskilling |
+| 📍 **Locations** | Worst 10s — UTR clusters/aisles or OTR DSPs/areas |
+| 📦 **PNOV** | Drivers + Driver IDs responsible |
 | 💰 **Cost Breakdown** | Cost by every dimension |
 | 🎯 **Focus** | Deep dive into any single metric |
 | 🔬 **Analysis & Trend** | Detailed findings + weekly trend |
@@ -962,16 +967,37 @@ def render_guide():
         st.markdown(SIZE_TIER_INFO)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MISSING PARCELS
+# MISSING PARCELS (improved explanation)
 # ═══════════════════════════════════════════════════════════════════════════════
 def render_missing_parcels(df, total, matched):
     mc = total - matched
     if mc > 0:
-        st.info(f"ℹ️ **{mc} parcel(s)** in PM had no SCC match — included but no location data.")
-        with st.expander(f"🔍 View {mc} unmatched"):
+        st.info(f"ℹ️ **{mc} of {total} parcels** are 'unmatched' — PerfectMile says they're lost, but SCC has no record of them.")
+        with st.expander(f"❓ What does 'unmatched' mean? + View {mc} parcels"):
+            st.markdown(f"""
+**What does "unmatched" mean?**
+
+You uploaded {total} parcels from PerfectMile (the system that flags parcels as lost) and {matched} of those were also found in SCC (the station scanning system that records where parcels are stowed).
+
+**{mc} parcels** appear in PerfectMile but NOT in SCC. This means:
+
+- SCC has **no record** of these parcels being scanned, stowed, or handled at this station
+- They are still counted in your totals (because PM says they're lost) but we have **no cluster, aisle, or location data** for them
+
+**Why does this happen?**
+
+| Reason | Explanation |
+|--------|-------------|
+| **Lost before arriving** | Parcel was lost on linehaul or at the sort centre — it never reached DRM2 |
+| **Never scanned in** | Parcel physically arrived but was never scanned into a stow location in SCC |
+| **ID mismatch** | The tracking ID format differs slightly between PM and SCC (e.g. extra spaces, different case) |
+| **System timeout** | PM automatically flagged it as lost after X hours with no scan — but it may never have been at this station |
+
+**What should you do?** These parcels are included in your loss count but can't be located. Focus your physical investigations on the {matched} matched parcels where you have location data.
+""")
             mdf = df[df["Cluster"].isna()].copy()
             if len(mdf)>0:
-                sel = st.selectbox("Parcel:", mdf["Tracking ID"].tolist(), key="miss")
+                sel = st.selectbox("View individual parcel:", mdf["Tracking ID"].tolist(), key="miss")
                 r = mdf[mdf["Tracking ID"]==sel].iloc[0]
                 st.markdown(f"**TID:** {sel} | **Sub Bucket:** {r.get('Sub Bucket','N/A')} | **Type:** {r.get('Type','N/A')} | **Shift:** {r.get('Shift','N/A')} | **Cost:** {fmt_cost(r.get('Cost (£)'))}")
 
@@ -1011,7 +1037,6 @@ elif mode == "Single Station":
         c1.metric("Lost", total); c2.metric("Cost", fmt_cost(tc)); c3.metric("Cluster", safe_top(df["Cluster"]))
         c4.metric("Aisle", safe_top(df["Aisle"])); c5.metric("DSP", str(safe_top(df["DSP Name"]))[:15])
         sk = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"]; c6.metric("Shift", safe_top(sk) if len(sk)>0 else "N/A")
-        # 7 TABS
         t1,t2,t3,t4,t5,t6,t7 = st.tabs(["📊 Summary","📍 Locations","📦 PNOV","💰 Cost Breakdown","🎯 Focus","🔬 Analysis & Trend","💾 Export"])
         with t1: render_summary_tab(df, total, dr, kp="s_")
         with t2: render_locations_tab(df, total, dr, kp="s_")
