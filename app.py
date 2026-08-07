@@ -904,7 +904,22 @@ def render_multi_station_trend(stations, names, kp=""):
                         st.markdown(f"**{station_name}**")
                         val = st.number_input(f"Total lost:", min_value=0, value=0, step=1, key=f"{kp}ms_v{i}_{j}")
                         if val > 0:
-                            all_station_data[station_name].append({"Week": wk_label, "Total": val})
+                            row = {"Week": wk_label, "Total": val}
+                            all_station_data[station_name].append(row)
+                # Optional lost breakdown (shared across all stations for this week)
+                if any(st.session_state.get(f"{kp}ms_v{i}_{j}", 0) > 0 for j in range(len(names))):
+                    show_breakdown = st.checkbox("Add lost breakdown", key=f"{kp}ms_bd_{i}")
+                    if show_breakdown:
+                        LOST_BUCKETS = ["Lost At Station", "Lost On Road", "Lost Between Stations", "Other Lost"]
+                        st.caption("Enter breakdown per station:")
+                        for j, station_name in enumerate(names):
+                            st.markdown(f"*{station_name}:*")
+                            bd_cols = st.columns(4)
+                            for k, bucket in enumerate(LOST_BUCKETS):
+                                with bd_cols[k]:
+                                    bd_val = st.number_input(bucket, min_value=0, value=0, step=1, key=f"{kp}ms_bd_{i}_{j}_{k}")
+                                    if bd_val > 0 and len(all_station_data[station_name]) > 0:
+                                        all_station_data[station_name][-1][bucket] = bd_val
 
             elif input_method == "📂 Upload CSVs":
                 cols = st.columns(len(names))
