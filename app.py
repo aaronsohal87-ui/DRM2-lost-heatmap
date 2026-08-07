@@ -1299,28 +1299,55 @@ def render_export_tab(df, total, dr, kp="", station_name=""):
 # ═══════════════════════════════════════════════════════════════════════════════
 def render_guide():
     st.markdown("### 📖 How to Use This Tool")
-    with st.expander("🚀 Quick Start", expanded=True):
+    with st.expander("🚀 Quick Start — Read This First", expanded=True):
         st.markdown("""
-**You need two CSV files:**
+**What you need:**
 
-| File | Where to get it |
-|------|----------------|
-| **Perfect Mile** | PerfectMile → L&U → Lost → Export CSV |
-| **SCC** | SCC → paste Tracking IDs → Export |
+| File | Where to get it | What it contains |
+|------|----------------|-----------------|
+| **Perfect Mile CSV** | PerfectMile → L&U → Lost → Export CSV | Which parcels are lost, when, cost |
+| **SCC CSV** | SCC → paste Tracking IDs → Export | Where parcels were in the station (cluster, aisle) |
 
-**Steps:** Upload both → Summary tab → Pick one problem → Go observe
+**How to use:**
+1. Go to **PerfectMile** → L&U → Lost → Export the CSV
+2. Copy the Tracking IDs from that export into **SCC** → Export
+3. Come here → Upload both files
+4. Look at the **Summary** tab first → identify the biggest problem
+5. Then use other tabs to dig deeper
+
+**⚠️ SCC data is only available for 4 weeks.** For longer trends, you only need the PM CSV (one per week).
 """)
-    with st.expander("📊 What each tab shows"):
+    with st.expander("📊 What each tab does"):
         st.markdown("""
-| Tab | What it tells you |
-|-----|------------------|
-| 📊 **Summary** | Clusters, shifts/hours, sub-buckets + cost, size |
-| 📍 **Locations** | Worst 10s — UTR clusters/aisles or OTR DSPs/areas |
-| 📦 **PNOV** | Drivers + Driver IDs responsible |
-| 💰 **Cost Breakdown** | Cost by every dimension |
-| 🎯 **Focus** | Deep dive into any single metric |
-| 🔬 **Analysis & Trend** | Detailed findings + weekly trend |
-| 💾 **Export** | Download processed data |
+| Tab | What it helps you do |
+|-----|---------------------|
+| 📊 **Summary** | See the full picture — clusters, shifts, sub-buckets, parcel sizes, hours of loss |
+| 📍 **Locations** | Find the worst 10 problem areas — UTR (station) or OTR (road) separately |
+| 📦 **PNOV** | See which DSPs/Flex drivers and which routes are losing PNOV parcels |
+| 💰 **Cost Breakdown** | Understand the financial impact — by sub-bucket, shift, DSP, size, cluster |
+| 🔬 **Analysis & Trend** | Get data-driven findings + track week-over-week progress |
+| 💾 **Export** | Download clean data for further use or sharing |
+""")
+    with st.expander("📈 How Trend works"):
+        st.markdown("""
+**Trend lets you track losses over multiple weeks.**
+
+| Input Method | What you do | What you get |
+|-------------|-------------|--------------|
+| **Type values** | Manually enter weekly totals (+ optional sub-bucket breakdown) | Trend line + sub-bucket chart |
+| **Upload CSVs** | Upload one PM CSV per week | Trend line + full analysis (sub-buckets, loss reasons, shifts, cost) |
+| **Mix** | Some weeks typed, some weeks CSV | Best of both |
+
+💡 **Always upload CSVs when possible** — they give much richer analysis than typed numbers.
+""")
+    with st.expander("🏢 Multi-Station mode"):
+        st.markdown("""
+**Comparing multiple sites? Upload PM + SCC for each station separately.**
+
+- Each station gets its own dataset (label it clearly, e.g. "DRM2 W28" or "DSP1")
+- All tabs let you pick which station to view
+- The **Trend tab** lets you compare stations side-by-side on the same chart
+- Each station gets a different coloured line so you can spot which is improving/worsening
 """)
     with st.expander("📏 Size Classification (Amazon UK FBA Tiers)"):
         st.markdown(SIZE_TIER_INFO)
