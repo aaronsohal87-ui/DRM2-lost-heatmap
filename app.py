@@ -711,52 +711,117 @@ Only the top 15 clusters (by loss count) are shown to keep it readable.
     st.caption("💡 Tip: Cross-reference this with the Shift Drill-Down to see the actual tracking IDs for that hotspot.")
 
 def render_trend_tab(df, total, dr, kp=""):
-    """Week-over-week trend."""
+    """Week-over-week trend — manual entry or multi-file upload."""
     st.markdown("#### 📈 Week-over-Week Trend")
     st.warning("⚠️ **Disclaimer:** Trends are only meaningful with enough data. "
-               "Upload at least 3-4 weeks of data for a reliable trend. "
+               "Include at least 3-4 weeks for a reliable picture. "
                "With only 2 weeks, the direction could just be normal variation. "
-               "The more weeks you include, the more confident you can be about whether things are actually improving or getting worse.")
-    date_col = None
-    for col in ["Marked Lost DT", "Dispatch Time"]:
-        if col in df.columns and df[col].dropna().count() >= 14:
-            date_col = col; break
-    if date_col is None:
-        st.warning("⚠️ Need 2+ weeks of dated data to show trends. Upload a larger date range.")
-        return
-    wdf = df.dropna(subset=[date_col]).copy()
-    wdf["Week"] = wdf[date_col].dt.isocalendar().week.astype(int)
-    wdf["Year"] = wdf[date_col].dt.year
-    wdf["YearWeek"] = wdf["Year"].astype(str) + "-W" + wdf["Week"].astype(str).str.zfill(2)
-    weekly = wdf.groupby("YearWeek").agg(Losses=("Tracking ID","count"), Cost=("Cost (£)","sum")).reset_index()
-    weekly = weekly.sort_values("YearWeek")
-    if len(weekly) < 2:
-        st.warning("Only 1 week of data. Upload 2+ weeks to see trends."); return
-    st.caption(f"Based on \'{date_col}\' column. Each point = one calendar week.")
+               "The more weeks you add, the more confident you can be.")
+    st.caption("PerfectMile shows weekly data separately (L&U → Lost Focus). "
+               "Enter the totals from each week below, or upload multiple weekly CSVs.")
+    
+    trend_mode = st.radio("Input method:", ["📝 Enter weekly totals (quick)", "📂 Upload multiple weekly CSVs"], horizontal=True, key=f"{kp}tm")
+    
+    if trend_mode == "📝 Enter weekly totals (quick)":
+        st.markdown("**Enter your weekly Lost (Total) numbers from PerfectMile:**")
+        st.caption("Go to PerfectMile → L&U → Lost Focus → read the weekly totals (like W28: 405, W29: 406, etc.)")
+        num_weeks = st.slider("How many weeks?", 2, 12, 4, key=f"{kp}nw")
+        weeks_data = []
+        cols = st.columns(min(num_weeks, 4))
+        for i in range(num_weeks):
+            with cols[i % 4]:
+                wk_label = st.text_input(f"Week {i+1} label:", value=f"W{i+1}", key=f"{kp}wl{i}")
+                wk_count = st.number_input(f"Lost count:", min_value=0, value=0, step=1, key=f"{kp}wc{i}")
+                wk_cost = st.number_input(f"Cost (£, optional):", min_value=0.0, value=0.0, step=0.01, key=f"{kp}wco{i}")
+                if wk_count > 0:
+                    weeks_data.append({"Week": wk_label, "Losses": int(wk_count), "Cost": wk_cost})
+        
+        if len(weeks_data) >= 2:
+            weekly = pd.DataFrame(weeks_data)
+            _render_trend_charts(weekly, kp)
+        elif len(weeks_data) == 1:
+            st.info("Enter at least 2 weeks to see a trend.")
+        else:
+            st.info("👆 Enter weekly totals above. You can get these from PerfectMile → L&U → Lost Focus (Weekly view).")
+    
+    else:
+        st.markdown("**Upload PM CSVs from different weeks:**")
+        st.caption("Download each week\'s CSV from PerfectMile separately, then upload them all here.")
+        num_files = st.slider("How many weeks?", 2, 8, 3, key=f"{kp}nf")
+        week_files = []
+        for i in range(num_files):
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                wk_label = st.text_input(f"Label:", value=f"W{i+1}", key=f"{kp}fl{i}")
+            with col2:
+                f_up = st.file_uploader(f"PM CSV ({wk_label}):", type="csv", key=f"{kp}fu{i}")
+            if f_up:
+                wdf = pd.read_csv(f_up)
+                count = len(wdf)
+                cost = 0.0
+                if "shipment_value" in wdf.columns:
+                    cost = pd.to_numeric(wdf["shipment_value"].astype(str), errors="coerce").sum()
+                week_files.append({"Week": wk_label, "Losses": count, "Cost": cost})
+        
+        if len(week_files) >= 2:
+            weekly = pd.DataFrame(week_files)
+            _render_trend_charts(weekly, kp)
+        elif len(week_files) == 1:
+            st.info("Upload at least 2 weeks to see a trend.")
+        else:
+            st.info("👆 Upload PM CSVs from different weeks above.")
+
+def _render_trend_charts(weekly, kp=""):
+    """Render trend charts from a weekly DataFrame with Week, Losses, Cost columns."""
+    st.markdown("---")
+    st.markdown("##### 📈 Trend")
+    
     fig, ax = plt.subplots(figsize=(7, 3))
-    ax.plot(weekly["YearWeek"], weekly["Losses"], marker="o", color="steelblue", linewidth=2)
+    ax.plot(weekly["Week"], weekly["Losses"], marker="o", color="steelblue", linewidth=2)
     for i, row in weekly.iterrows():
-        ax.annotate(str(int(row["Losses"])), xy=(row["YearWeek"], row["Losses"]), xytext=(0, 8), textcoords="offset points", ha="center", fontsize=8)
+        ax.annotate(str(int(row["Losses"])), xy=(row["Week"], row["Losses"]), xytext=(0, 8), textcoords="offset points", ha="center", fontsize=8)
     ax.set_xlabel("Week", fontsize=8); ax.set_ylabel("Losses", fontsize=8)
     ax.set_title("Lost Parcels per Week", fontsize=9); ax.tick_params(labelsize=7)
     plt.xticks(rotation=45); plt.tight_layout()
     st.pyplot(fig)
+    
+    # Trend direction
     first_w = int(weekly.iloc[0]["Losses"]); last_w = int(weekly.iloc[-1]["Losses"])
-    if last_w < first_w * 0.8:
-        st.success(f"📉 **Improving!** Down from {first_w} to {last_w} per week.")
-    elif last_w > first_w * 1.2:
-        st.error(f"📈 **Getting worse.** Up from {first_w} to {last_w} per week.")
+    if first_w > 0:
+        pct_change = round((last_w - first_w) / first_w * 100, 1)
     else:
-        st.info(f"➡️ **Stable.** {first_w} → {last_w} per week (within ±20%).")
-    fig2, ax2 = plt.subplots(figsize=(7, 2.5))
-    ax2.bar(weekly["YearWeek"], weekly["Cost"], color="teal")
-    for i, row in weekly.iterrows():
-        ax2.text(row["YearWeek"], row["Cost"]+0.5, fmt_cost(row["Cost"]), ha="center", fontsize=6)
-    ax2.set_xlabel("Week", fontsize=8); ax2.set_ylabel("£", fontsize=8)
-    ax2.set_title("Cost per Week", fontsize=9); ax2.tick_params(labelsize=7)
-    plt.xticks(rotation=45); plt.tight_layout()
-    st.pyplot(fig2)
-    st.dataframe(weekly.rename(columns={"YearWeek":"Week"}), width="stretch", hide_index=True)
+        pct_change = 0
+    
+    if last_w < first_w * 0.8:
+        st.success(f"📉 **Improving!** Down from {first_w} to {last_w} ({pct_change:+.1f}%)")
+    elif last_w > first_w * 1.2:
+        st.error(f"📈 **Getting worse.** Up from {first_w} to {last_w} ({pct_change:+.1f}%)")
+    else:
+        st.info(f"➡️ **Stable.** {first_w} → {last_w} ({pct_change:+.1f}%, within ±20%)")
+    
+    # Cost chart if available
+    if weekly["Cost"].sum() > 0:
+        fig2, ax2 = plt.subplots(figsize=(7, 2.5))
+        ax2.bar(weekly["Week"], weekly["Cost"], color="teal")
+        for i, row in weekly.iterrows():
+            ax2.text(row["Week"], row["Cost"]+0.5, fmt_cost(row["Cost"]), ha="center", fontsize=6)
+        ax2.set_xlabel("Week", fontsize=8); ax2.set_ylabel("£", fontsize=8)
+        ax2.set_title("Cost per Week", fontsize=9); ax2.tick_params(labelsize=7)
+        plt.xticks(rotation=45); plt.tight_layout()
+        st.pyplot(fig2)
+    
+    # Summary table
+    display = weekly.copy()
+    if display["Cost"].sum() > 0:
+        display["Cost"] = display["Cost"].apply(fmt_cost)
+    else:
+        display = display.drop(columns=["Cost"])
+    display.index = range(1, len(display)+1)
+    st.dataframe(display, width="stretch", hide_index=True)
+    
+    # Download
+    st.download_button("⬇️ Download trend data", weekly.to_csv(index=False), "weekly_trend.csv", "text/csv", key=f"{kp}dl_trend")
+
 
 def render_day_tab(df, total, dr, kp=""):
     """Day of week tab with tracking ID drill-down."""
