@@ -556,7 +556,7 @@ def render_pnov_tab(df, total, dr, kp=""):
             else:
                 st.success("✅ No DSPs with 3+ PNOV losses.")
 
-with st.expander("📋 All PNOV Tracking IDs"):
+    with st.expander("📋 All PNOV Tracking IDs"):
         tid_cols = [c for c in ["Tracking ID","Cluster","Aisle","DSP Name","Driver Id","Driver Type","Cost (£)","Loss Reason"] if c in pnov_df.columns]
         tid_df = pnov_df[tid_cols].reset_index(drop=True)
         tid_df.index = range(1, len(tid_df)+1)
