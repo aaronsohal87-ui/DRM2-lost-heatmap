@@ -747,6 +747,7 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
         trend_mode = st.selectbox("Input method:", ["📝 Type values only", "📂 Upload CSVs only", "🔀 Mix (CSV + manual)"], key=f"{kp}trend_mode")
 
         if trend_mode == "📝 Type values only":
+            st.caption("💡 Typed values show the trend line only. **Upload PM CSVs** (option above) for full analysis including sub-buckets, loss reasons, shifts, and cost breakdown.")
             num_weeks = st.slider("How many weeks?", 1, 12, 4, key=f"{kp}nw")
             include_sb = st.checkbox("Include sub-bucket breakdown", key=f"{kp}inc_sb")
             weeks_data = []
@@ -803,33 +804,106 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
                         st.error(f"Error reading {wk_label}: {e}")
             _render_trend_chart(weeks_data, kp)
 
-            # Analysis over time — run analysis on combined CSVs
-            if len(uploaded_dfs) >= 2:
+            # Analysis over time — run full analysis on combined CSVs
+            if len(uploaded_dfs) >= 1:
                 st.markdown("---")
-                if st.checkbox("🔬 Run analysis across all weeks (combined dataset)", key=f"{kp}multi_analysis"):
+                st.info("💡 **CSV uploads give much richer analysis than typed values.** "
+                        "Where possible, always upload the PM CSV so the tool can do full breakdown analysis.")
+            if len(uploaded_dfs) >= 2:
+                if st.checkbox("🔬 Run full analysis across all weeks (combined dataset)", key=f"{kp}multi_analysis"):
                     combined_pm = pd.concat(uploaded_dfs, ignore_index=True)
                     combined_total = len(combined_pm)
-                    st.markdown(f"### 🔬 Analysis Across All Weeks ({combined_total} parcels combined)")
-                    st.caption("This shows patterns that PERSIST across weeks — not one-offs.")
-                    # We can only do PM-level analysis (no SCC merge here)
-                    # But we can still do sub-bucket, loss reason analysis
+                    st.markdown(f"### 🔬 Combined Analysis — {combined_total} parcels across {len(uploaded_dfs)} weeks")
+                    st.caption("Shows patterns that PERSIST across weeks — recurring problems, not one-offs.")
+
+                    # ─── OTR vs UTR SPLIT ─────────────────────────────────────
                     if "sub_bucket" in combined_pm.columns:
                         combined_pm["Type"] = combined_pm["sub_bucket"].apply(classify_otr_utr)
-                        combined_pm["Shift"] = combined_pm.apply(assign_shift, axis=1)
+                        otr_n = len(combined_pm[combined_pm["Type"]=="OTR"])
+                        utr_n = len(combined_pm[combined_pm["Type"]=="UTR"])
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Total", combined_total)
+                        c2.metric("UTR (Station)", utr_n)
+                        c3.metric("OTR (Road)", otr_n)
+
+                    # ─── SUB-BUCKET BREAKDOWN ─────────────────────────────────
+                    if "sub_bucket" in combined_pm.columns:
+                        st.markdown("---")
+                        st.markdown("#### 🏷️ Sub-Bucket Breakdown (all weeks combined)")
                         sb_counts = combined_pm["sub_bucket"].dropna().value_counts()
-                        st.markdown("**Sub-Bucket patterns across all weeks:**")
-                        sb_tbl = sb_counts.head(10).reset_index()
-                        sb_tbl.columns = ["Sub Bucket", "Total Across Weeks"]
+                        sb_tbl = sb_counts.reset_index()
+                        sb_tbl.columns = ["Sub Bucket", "Total"]
+                        sb_tbl["% of All"] = (sb_tbl["Total"] / combined_total * 100).round(1)
                         sb_tbl.index = range(1, len(sb_tbl)+1)
                         st.dataframe(sb_tbl, width="stretch")
+                        # Chart
+                        if len(sb_counts) > 0:
+                            st.pyplot(make_bar_horiz(sb_counts, "Sub-Buckets (All Weeks Combined)", color="teal"))
+
+                    # ─── LOSS REASONS ─────────────────────────────────────────
                     if "previous_reason" in combined_pm.columns:
+                        st.markdown("---")
+                        st.markdown("#### ❓ Loss Reasons (persistent across weeks)")
                         lr = combined_pm["previous_reason"].replace({"NOREASON":"No Reason","NONE":"No Reason"}).fillna("Unknown").value_counts()
-                        st.markdown("**Persistent loss reasons:**")
-                        lr_tbl = lr.head(5).reset_index()
-                        lr_tbl.columns = ["Loss Reason", "Total Across Weeks"]
+                        lr_tbl = lr.head(10).reset_index()
+                        lr_tbl.columns = ["Loss Reason", "Total"]
+                        lr_tbl["% of All"] = (lr_tbl["Total"] / combined_total * 100).round(1)
                         lr_tbl.index = range(1, len(lr_tbl)+1)
                         st.dataframe(lr_tbl, width="stretch")
-                    st.info("💡 For full cluster/aisle/DSP analysis over time, upload the same SCC data merged with each week's PM in Single Station mode.")
+
+                    # ─── SHIFT DISTRIBUTION ───────────────────────────────────
+                    if "sub_bucket" in combined_pm.columns:
+                        st.markdown("---")
+                        st.markdown("#### ⏰ Shift Distribution (all weeks)")
+                        # Use sub-bucket to assign shifts
+                        combined_pm["Shift"] = combined_pm["sub_bucket"].map(SUB_BUCKET_SHIFT_MAP).fillna("Unknown")
+                        shift_counts = combined_pm["Shift"].value_counts().reindex(SHIFT_ORDER, fill_value=0)
+                        shift_tbl = pd.DataFrame({
+                            "Shift": SHIFT_ORDER,
+                            "Total": [int(shift_counts.get(s, 0)) for s in SHIFT_ORDER],
+                            "%": [f"{round(shift_counts.get(s,0)/combined_total*100,1)}%" for s in SHIFT_ORDER],
+                            "Window": [SHIFT_DEFINITIONS[s] for s in SHIFT_ORDER]
+                        })
+                        shift_tbl.index = range(1, len(shift_tbl)+1)
+                        st.dataframe(shift_tbl, width="stretch")
+
+                    # ─── COST ANALYSIS ────────────────────────────────────────
+                    if "shipment_value" in combined_pm.columns:
+                        st.markdown("---")
+                        st.markdown("#### 💰 Cost Impact (all weeks)")
+                        combined_pm["Cost"] = pd.to_numeric(combined_pm["shipment_value"].astype(str).str.replace("[£$,]", "", regex=True), errors="coerce").fillna(0)
+                        total_cost = combined_pm["Cost"].sum()
+                        avg_cost = total_cost / combined_total if combined_total > 0 else 0
+                        c1, c2 = st.columns(2)
+                        c1.metric("Total Cost (all weeks)", fmt_cost(total_cost))
+                        c2.metric("Avg per parcel", fmt_cost(avg_cost))
+                        # Cost by sub-bucket
+                        if "sub_bucket" in combined_pm.columns:
+                            cost_by_sb = combined_pm.groupby("sub_bucket").agg(
+                                Count=("sub_bucket", "count"), Cost=("Cost", "sum")
+                            ).sort_values("Cost", ascending=False).reset_index()
+                            cost_by_sb["Avg/Parcel"] = (cost_by_sb["Cost"] / cost_by_sb["Count"]).apply(fmt_cost)
+                            cost_by_sb["Cost"] = cost_by_sb["Cost"].apply(fmt_cost)
+                            cost_by_sb.index = range(1, len(cost_by_sb)+1)
+                            st.dataframe(cost_by_sb, width="stretch")
+
+                    # ─── WEEK-OVER-WEEK COMPARISON TABLE ──────────────────────
+                    if "sub_bucket" in combined_pm.columns and "event_datetime" in combined_pm.columns:
+                        st.markdown("---")
+                        st.markdown("#### 📅 Week-over-Week by Sub-Bucket")
+                        st.caption("Shows if specific sub-buckets are improving or worsening across weeks.")
+                        # Tag each row with its source week
+                        for idx, wdf in enumerate(uploaded_dfs):
+                            if idx < len(weeks_data):
+                                wdf["_week"] = weeks_data[idx]["Week"]
+                        tagged = pd.concat([wdf for wdf in uploaded_dfs if "_week" in wdf.columns], ignore_index=True)
+                        if "_week" in tagged.columns and "sub_bucket" in tagged.columns:
+                            pivot = tagged.groupby(["_week", "sub_bucket"]).size().unstack(fill_value=0)
+                            st.dataframe(pivot, width="stretch")
+
+                    st.markdown("---")
+                    st.success("✅ This is the same level of analysis as Single Station mode — just without cluster/aisle data (which requires SCC).")
+                    st.caption("For cluster/aisle/DSP drill-down, upload PM+SCC together in Single Station mode.")
 
         else:  # Mix
             st.caption("For each week, either upload a CSV OR type the total manually.")
