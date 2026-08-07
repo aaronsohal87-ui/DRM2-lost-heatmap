@@ -876,6 +876,109 @@ def render_analysis_trend_tab(df, total, dr, kp=""):
                                 st.error(f"Error: {e}")
             _render_trend_chart(weeks_data, kp)
 
+
+def render_multi_station_trend(stations, names, kp=""):
+    """Multi-station trend comparison — each station gets its own line on the chart."""
+    st.markdown("### 📈 Multi-Station Trend Comparison")
+    st.caption("Enter weekly totals for each station. Each station gets a separate trend line so you can compare them directly.")
+    st.warning("⚠️ Trends need 3-4+ weeks to be meaningful.")
+
+    num_weeks = st.slider("How many weeks?", 1, 12, 4, key=f"{kp}ms_nw")
+    
+    # Collect data per station per week
+    all_station_data = {}
+    for station_name in names:
+        all_station_data[station_name] = []
+
+    # Input method
+    input_method = st.selectbox("Input method:", ["📝 Type values", "📂 Upload CSVs", "🔀 Mix"], key=f"{kp}ms_method")
+
+    for i in range(num_weeks):
+        with st.expander(f"Week {i+1}", expanded=(i < 2)):
+            wk_label = st.text_input(f"Week label:", value=f"W{i+1}", key=f"{kp}ms_wl{i}")
+            
+            if input_method == "📝 Type values":
+                cols = st.columns(len(names))
+                for j, station_name in enumerate(names):
+                    with cols[j]:
+                        st.markdown(f"**{station_name}**")
+                        val = st.number_input(f"Total lost:", min_value=0, value=0, step=1, key=f"{kp}ms_v{i}_{j}")
+                        if val > 0:
+                            all_station_data[station_name].append({"Week": wk_label, "Total": val})
+
+            elif input_method == "📂 Upload CSVs":
+                cols = st.columns(len(names))
+                for j, station_name in enumerate(names):
+                    with cols[j]:
+                        st.markdown(f"**{station_name}**")
+                        f_up = st.file_uploader(f"PM CSV:", type="csv", key=f"{kp}ms_f{i}_{j}")
+                        if f_up:
+                            try:
+                                wdf = pd.read_csv(f_up)
+                                all_station_data[station_name].append({"Week": wk_label, "Total": len(wdf)})
+                                st.caption(f"→ {len(wdf)} parcels")
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+
+            else:  # Mix
+                cols = st.columns(len(names))
+                for j, station_name in enumerate(names):
+                    with cols[j]:
+                        st.markdown(f"**{station_name}**")
+                        inp = st.radio("Input:", ["Type", "CSV"], horizontal=True, key=f"{kp}ms_r{i}_{j}")
+                        if inp == "Type":
+                            val = st.number_input(f"Total:", min_value=0, value=0, step=1, key=f"{kp}ms_mv{i}_{j}")
+                            if val > 0:
+                                all_station_data[station_name].append({"Week": wk_label, "Total": val})
+                        else:
+                            f_up = st.file_uploader("CSV:", type="csv", key=f"{kp}ms_mf{i}_{j}")
+                            if f_up:
+                                try:
+                                    wdf = pd.read_csv(f_up)
+                                    all_station_data[station_name].append({"Week": wk_label, "Total": len(wdf)})
+                                    st.caption(f"→ {len(wdf)}")
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+
+    # Plot comparison chart
+    has_data = {n: d for n, d in all_station_data.items() if len(d) >= 2}
+    if len(has_data) >= 1:
+        st.markdown("---")
+        st.markdown("#### 📊 Trend Comparison")
+        station_colors = ["steelblue", "firebrick", "darkgreen", "purple", "darkorange"]
+        fig, ax = plt.subplots(figsize=(8, 3.5))
+        for idx, (station_name, data) in enumerate(has_data.items()):
+            sdf = pd.DataFrame(data)
+            color = station_colors[idx % len(station_colors)]
+            ax.plot(sdf["Week"], sdf["Total"], marker="o", linewidth=2, label=station_name, color=color)
+            for _, row in sdf.iterrows():
+                ax.annotate(str(int(row["Total"])), xy=(row["Week"], row["Total"]),
+                           xytext=(0, 8), textcoords="offset points", ha="center", fontsize=7, color=color)
+        ax.set_xlabel("Week", fontsize=8); ax.set_ylabel("Losses", fontsize=8)
+        ax.set_title("Lost Parcels — Station Comparison", fontsize=9)
+        ax.legend(fontsize=8); ax.tick_params(labelsize=7)
+        plt.xticks(rotation=45); plt.tight_layout()
+        st.pyplot(fig)
+
+        # Comparison table
+        st.markdown("**Week-by-Week Comparison:**")
+        comparison = {}
+        all_weeks = []
+        for station_name, data in has_data.items():
+            for d in data:
+                if d["Week"] not in all_weeks:
+                    all_weeks.append(d["Week"])
+        for station_name, data in has_data.items():
+            comparison[station_name] = {d["Week"]: d["Total"] for d in data}
+        comp_df = pd.DataFrame(comparison, index=all_weeks).fillna(0).astype(int)
+        comp_df.index.name = "Week"
+        st.dataframe(comp_df, width="stretch")
+    elif any(len(d) == 1 for d in all_station_data.values()):
+        st.info("Need at least 2 weeks per station to show a trend.")
+    else:
+        st.info("👆 Enter weekly totals for each station above.")
+
+
 def _render_trend_chart(weeks_data, kp=""):
     if len(weeks_data) >= 2:
         weekly = pd.DataFrame(weeks_data)
@@ -1093,13 +1196,24 @@ else:
                     sdf = stations[n]
                     st.markdown(f"**{n}:** {len(sdf)} parcels — {fmt_cost(sdf['Cost (£)'].sum())} | Worst cluster: {safe_top(sdf['Cluster'])}")
             with t2:
-                sel = st.selectbox("Dataset:", names, key="mcl"); render_locations_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"m{sel}_")
+                sel = st.selectbox("Dataset:", names, key="mcl")
+                st.markdown(f"**📍 Showing: {sel}**")
+                render_locations_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"m{sel}_")
             with t3:
-                sel = st.selectbox("Dataset:", names, key="mcp"); render_pnov_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mp{sel}_")
+                sel = st.selectbox("Dataset:", names, key="mcp")
+                st.markdown(f"**📍 Showing: {sel}**")
+                render_pnov_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mp{sel}_")
             with t4:
-                sel = st.selectbox("Dataset:", names, key="mcc"); render_cost_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mc{sel}_")
+                sel = st.selectbox("Dataset:", names, key="mcc")
+                st.markdown(f"**📍 Showing: {sel}**")
+                render_cost_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mc{sel}_")
             with t5:
-                sel = st.selectbox("Dataset:", names, key="mca"); render_analysis_trend_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"ma{sel}_")
+                multi_at_view = st.selectbox("View:", ["🔬 Analysis (per station)", "📈 Multi-Station Trend"], key="mat_view")
+                if multi_at_view == "🔬 Analysis (per station)":
+                    sel = st.selectbox("Dataset:", names, key="mca")
+                    render_analysis_trend_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"ma{sel}_")
+                else:
+                    render_multi_station_trend(stations, names, kp="ms_")
             with t6:
                 sel = st.selectbox("Dataset:", names, key="mce"); render_export_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"me{sel}_", station_name=sel)
     elif len(uploaded) == 1: st.warning("Need 2+ datasets to compare.")
