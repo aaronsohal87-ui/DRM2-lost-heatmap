@@ -223,13 +223,23 @@ def make_bar_horiz(data, title, color="steelblue", figsize_width=7, max_label=LA
     if len(data) == 0: return plt.subplots(figsize=(figsize_width, 2))[0]
     h = max(2,len(data)*0.3); fig,ax = plt.subplots(figsize=(figsize_width,h))
     labs = trunc(data.index,max_label); ax.barh(labs,data.values,color=color); ax.invert_yaxis()
-    for i,v in enumerate(data.values): ax.text(v+0.2,i,str(int(v)),va="center",fontsize=7)
-    ax.set_xlabel("Lost Parcels",fontsize=8); ax.set_title(title,fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout(); return fig
+    max_val = data.values.max() if len(data.values) > 0 else 1
+    ax.set_xlim(right=max_val * 1.18)
+    for i,v in enumerate(data.values): ax.text(v + max_val*0.02, i, str(int(v)), va="center", fontsize=7)
+    ax.set_xlabel("Lost Parcels",fontsize=8); ax.set_title(title,fontsize=9); ax.tick_params(labelsize=7)
+    if len(data) > 0 and data.values.max() > 0:
+        ax.set_xlim(right=data.values.max() * 1.18)
+    plt.tight_layout(); return fig
 def make_bar_shift(data, title):
     data = data.reindex(SHIFT_ORDER,fill_value=0); fig,ax = plt.subplots(figsize=CHART)
     bars = ax.bar(SHIFT_ORDER,[data[s] for s in SHIFT_ORDER],color=[SHIFT_COLORS[s] for s in SHIFT_ORDER])
+    max_val = max([data[s] for s in SHIFT_ORDER]) if any(data[s] > 0 for s in SHIFT_ORDER) else 1
+    ax.set_ylim(top=max_val * 1.25)
     for b in bars: ax.text(b.get_x()+b.get_width()/2,b.get_height()+0.2,str(int(b.get_height())),ha="center",fontsize=7)
-    ax.set_xlabel("Shift",fontsize=8); ax.set_ylabel("Lost",fontsize=8); ax.set_title(title,fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout(); return fig
+    ax.set_xlabel("Shift",fontsize=8); ax.set_ylabel("Lost",fontsize=8); ax.set_title(title,fontsize=9); ax.tick_params(labelsize=7)
+    max_val = max(data[s] for s in SHIFT_ORDER) if any(data[s] > 0 for s in SHIFT_ORDER) else 1
+    ax.set_ylim(top=max_val * 1.25)
+    plt.tight_layout(); return fig
 def make_pie_otr_utr(df, total, title):
     otr_n = len(df[df["Type"]=="OTR"]); utr_n = len(df[df["Type"]=="UTR"])
     labels,sizes,colors,explode = [],[],[],[]
@@ -478,7 +488,7 @@ def render_pnov_tab(df, total, dr, kp=""):
             if has_driver_id:
                 tbl = dsp_data.groupby(["DSP Name","Driver Id"]).agg(
                     Count=("Tracking ID", "count"), Cost=("Cost (£)", "sum")
-                ).sort_values("Count", ascending=False).reset_index()
+                ).reset_index().sort_values("DSP Name", ascending=True)
                 tbl["Cost"] = tbl["Cost"].apply(fmt_cost)
                 tbl.index = range(1, len(tbl)+1)
                 st.markdown("**Each row = one driver. Give this to DSPs to ask why.**")
@@ -486,7 +496,7 @@ def render_pnov_tab(df, total, dr, kp=""):
             else:
                 tbl = dsp_data.groupby("DSP Name").agg(
                     Count=("Tracking ID", "count"), Cost=("Cost (£)", "sum"), Driver_Type=("Driver Type", "first")
-                ).sort_values("Count", ascending=False).reset_index()
+                ).reset_index().sort_values("DSP Name", ascending=True)
                 tbl["Cost"] = tbl["Cost"].apply(fmt_cost); tbl.index = range(1, len(tbl)+1)
                 st.dataframe(tbl, width="stretch")
             dc = dsp_data["DSP Name"].value_counts()
@@ -498,8 +508,13 @@ def render_pnov_tab(df, total, dr, kp=""):
                 fig, ax = plt.subplots(figsize=(3, 1.5))
                 cmap = {"Flex": "#e74c3c", "DSP": "#3498db", "Unknown": "#95a5a6"}
                 ax.bar(type_counts.index, type_counts.values, color=[cmap.get(x, "gray") for x in type_counts.index])
+                pnov_max_val = type_counts.values.max() if len(type_counts.values) > 0 else 1
+                ax.set_ylim(top=pnov_max_val * 1.25)
                 for i, v in enumerate(type_counts.values): ax.text(i, v+0.2, str(int(v)), ha="center", fontsize=8)
-                ax.set_title("PNOV: Flex vs DSP", fontsize=9); ax.tick_params(labelsize=7); plt.tight_layout()
+                ax.set_title("PNOV: Flex vs DSP", fontsize=9); ax.tick_params(labelsize=7)
+                if len(type_counts) > 0 and type_counts.values.max() > 0:
+                    ax.set_ylim(top=type_counts.values.max() * 1.25)
+                plt.tight_layout()
                 st.pyplot(fig)
         else:
             st.warning("No driver data for PNOV parcels.")
@@ -507,6 +522,12 @@ def render_pnov_tab(df, total, dr, kp=""):
     with st.expander("📍 PNOV by Cluster"):
         cl = pnov_df["Cluster"].dropna().value_counts()
         if len(cl) > 0: st.pyplot(make_bar_horiz(cl.head(15), f"PNOV by Cluster ({dr})", color="purple"))
+
+    with st.expander("📍 PNOV by Aisle"):
+        al = pnov_df["Aisle"].dropna().value_counts()
+        if len(al) > 0: st.pyplot(make_bar_horiz(al.head(15), f"PNOV by Aisle ({dr})", color="teal"))
+        else: st.info("No aisle data for PNOV parcels.")
+
     with st.expander("📋 All PNOV Tracking IDs"):
         tid_cols = [c for c in ["Tracking ID","Cluster","Aisle","DSP Name","Driver Id","Driver Type","Cost (£)","Loss Reason"] if c in pnov_df.columns]
         tid_df = pnov_df[tid_cols].reset_index(drop=True)
@@ -535,11 +556,26 @@ def render_cost_tab(df, total, dr, kp=""):
         shift_cost["Cost"] = shift_cost["Cost"].apply(fmt_cost); shift_cost.index = range(1, len(shift_cost)+1)
         st.dataframe(shift_cost, width="stretch")
     with st.expander("💰 Cost by DSP"):
-        dsp_df = df.dropna(subset=["DSP Name"])
-        if len(dsp_df)>0:
-            dc = dsp_df.groupby("DSP Name").agg(Count=("Tracking ID","count"),Cost=("Cost (£)","sum")).sort_values("Cost",ascending=False).reset_index()
+        st.caption("⚠️ Only includes OTR (road) losses — DSPs are only accountable for parcels lost after dispatch.")
+        otr_dsp = df[(df["Type"]=="OTR") & (df["DSP Name"].notna())].copy()
+        if len(otr_dsp)>0:
+            dc = otr_dsp.groupby("DSP Name").agg(Count=("Tracking ID","count"),Cost=("Cost (£)","sum")).sort_values("Cost",ascending=False).reset_index()
             dc["Avg/Parcel"] = (dc["Cost"]/dc["Count"]).apply(fmt_cost); dc["Cost"] = dc["Cost"].apply(fmt_cost)
             dc.index = range(1,len(dc)+1); st.dataframe(dc,width="stretch")
+        else:
+            st.info("No OTR parcels with DSP data.")
+    with st.expander("💰 Cost by Flex Driver"):
+        st.caption("Only Flex (CSP_COMPANY_NAME) OTR losses.")
+        flex_otr = df[(df["DSP Name"]=="FLEX DRIVER") & (df["Type"]=="OTR")].copy()
+        if len(flex_otr) > 0:
+            st.metric("Flex OTR Losses", f"{len(flex_otr)} parcels — {fmt_cost(flex_otr['Cost (£)'].sum())}")
+            # Show by cluster if available
+            fc = flex_otr["Cluster"].dropna().value_counts().head(10)
+            if len(fc) > 0:
+                st.markdown("**Flex losses by cluster:**")
+                st.dataframe(make_table(fc, "Cluster", "Count"), width="stretch")
+        else:
+            st.info("No Flex OTR losses found.")
     with st.expander("💰 Cost by Size Tier"):
         sz_cost = df.groupby("Size Category").agg(Count=("Tracking ID","count"), Cost=("Cost (£)","sum")).sort_values("Cost", ascending=False).reset_index()
         sz_cost["Avg/Parcel"] = (sz_cost["Cost"]/sz_cost["Count"]).apply(fmt_cost)
@@ -566,14 +602,13 @@ def render_cost_tab(df, total, dr, kp=""):
 # ═══════════════════════════════════════════════════════════════════════════════
 # FOCUS TAB (simplified — no Associate, bullet points explaining value)
 # ═══════════════════════════════════════════════════════════════════════════════
-def render_focus_tab(df, total, dr, kp=""):
+def render_deep_dive_tab(df, total, dr, kp=""):
     if total == 0: st.warning("No data."); return
-    st.markdown("### 🎯 Focus — Deep Dive into a Metric")
+    st.markdown("### 🔎 Deep Dive")
     st.markdown("""
-**What does Focus add over other tabs?**
-- Gives you **everything about ONE metric** in one place — full table, worst performers, and cross-references
-- Shows relationships other tabs don't (e.g. which aisles are in which clusters, which DSPs lose which sub-buckets)
-- Use it when you've identified a problem area in Summary/Locations and want to **go deeper**
+**Select a metric and a specific value to see everything about it in one place.**
+- Cross-references that other tabs don't show (e.g. which aisles within a cluster, which sub-buckets a DSP loses)
+- Use when you've spotted a problem in Summary/Locations and want to dig into the detail
 """)
     metric = st.selectbox("Focus on:", ["Cluster", "DSP", "Aisle", "Shift", "Sub Bucket", "Size Category"], key=f"{kp}focus_metric")
 
@@ -1037,12 +1072,12 @@ elif mode == "Single Station":
         c1.metric("Lost", total); c2.metric("Cost", fmt_cost(tc)); c3.metric("Cluster", safe_top(df["Cluster"]))
         c4.metric("Aisle", safe_top(df["Aisle"])); c5.metric("DSP", str(safe_top(df["DSP Name"]))[:15])
         sk = df[df["Shift"].isin(SHIFT_ORDER)]["Shift"]; c6.metric("Shift", safe_top(sk) if len(sk)>0 else "N/A")
-        t1,t2,t3,t4,t5,t6,t7 = st.tabs(["📊 Summary","📍 Locations","📦 PNOV","💰 Cost Breakdown","🎯 Focus","🔬 Analysis & Trend","💾 Export"])
+        t1,t2,t3,t4,t5,t6,t7 = st.tabs(["📊 Summary","📍 Locations","📦 PNOV","💰 Cost Breakdown","🔎 Deep Dive","🔬 Analysis & Trend","💾 Export"])
         with t1: render_summary_tab(df, total, dr, kp="s_")
         with t2: render_locations_tab(df, total, dr, kp="s_")
         with t3: render_pnov_tab(df, total, dr, kp="s_")
         with t4: render_cost_tab(df, total, dr, kp="s_")
-        with t5: render_focus_tab(df, total, dr, kp="s_")
+        with t5: render_deep_dive_tab(df, total, dr, kp="s_")
         with t6: render_analysis_trend_tab(df, total, dr, kp="s_")
         with t7: render_export_tab(df, total, dr, kp="s_")
     else:
@@ -1073,7 +1108,7 @@ else:
             for n in names:
                 sc_val, sc_col, sc_lab, sc_reas = render_health_score(stations[n], len(stations[n]))
                 st.caption(f"{n}: {sc_col} {sc_val}/10 — {sc_lab}" + (f" ({', '.join(sc_reas)})" if sc_reas else ""))
-            t1,t2,t3,t4,t5,t6,t7 = st.tabs(["📊 Summary","📍 Locations","📦 PNOV","💰 Cost Breakdown","🎯 Focus","🔬 Analysis & Trend","💾 Export"])
+            t1,t2,t3,t4,t5,t6,t7 = st.tabs(["📊 Summary","📍 Locations","📦 PNOV","💰 Cost Breakdown","🔎 Deep Dive","🔬 Analysis & Trend","💾 Export"])
             with t1:
                 for n in names:
                     sdf = stations[n]
@@ -1085,7 +1120,7 @@ else:
             with t4:
                 sel = st.selectbox("Dataset:", names, key="mcc"); render_cost_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mc{sel}_")
             with t5:
-                sel = st.selectbox("Dataset:", names, key="mcf"); render_focus_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mf{sel}_")
+                sel = st.selectbox("Dataset:", names, key="mcf"); render_deep_dive_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"mf{sel}_")
             with t6:
                 sel = st.selectbox("Dataset:", names, key="mca"); render_analysis_trend_tab(stations[sel], len(stations[sel]), get_date_range(stations[sel]), kp=f"ma{sel}_")
             with t7:
