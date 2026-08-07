@@ -1005,8 +1005,15 @@ def render_multi_station_trend(stations, names, kp=""):
                         if f_up:
                             try:
                                 wdf = pd.read_csv(f_up)
-                                all_station_data[station_name].append({"Week": wk_label, "Total": len(wdf)})
-                                st.caption(f"→ {len(wdf)} parcels")
+                                row = {"Week": wk_label, "Total": len(wdf)}
+                                if "sub_bucket" in wdf.columns:
+                                    sb_counts = wdf["sub_bucket"].dropna().value_counts()
+                                    for sb_name, sb_count in sb_counts.items():
+                                        row[sb_name] = int(sb_count)
+                                    st.caption(f"→ {len(wdf)} parcels ({len(sb_counts)} sub-buckets)")
+                                else:
+                                    st.caption(f"→ {len(wdf)} parcels")
+                                all_station_data[station_name].append(row)
                             except Exception as e:
                                 st.error(f"Error: {e}")
 
@@ -1025,8 +1032,15 @@ def render_multi_station_trend(stations, names, kp=""):
                             if f_up:
                                 try:
                                     wdf = pd.read_csv(f_up)
-                                    all_station_data[station_name].append({"Week": wk_label, "Total": len(wdf)})
-                                    st.caption(f"→ {len(wdf)}")
+                                    row = {"Week": wk_label, "Total": len(wdf)}
+                                    if "sub_bucket" in wdf.columns:
+                                        sb_counts = wdf["sub_bucket"].dropna().value_counts()
+                                        for sb_name, sb_count in sb_counts.items():
+                                            row[sb_name] = int(sb_count)
+                                        st.caption(f"→ {len(wdf)} ({len(sb_counts)} sub-buckets)")
+                                    else:
+                                        st.caption(f"→ {len(wdf)}")
+                                    all_station_data[station_name].append(row)
                                 except Exception as e:
                                     st.error(f"Error: {e}")
 
@@ -1063,6 +1077,42 @@ def render_multi_station_trend(stations, names, kp=""):
         comp_df = pd.DataFrame(comparison, index=all_weeks).fillna(0).astype(int)
         comp_df.index.name = "Week"
         st.dataframe(comp_df, width="stretch")
+        # Sub-bucket comparison (if data available from CSV uploads)
+        has_sb_data = False
+        for station_name, data in has_data.items():
+            for d in data:
+                if any(k not in ["Week", "Total"] for k in d.keys()):
+                    has_sb_data = True
+                    break
+        if has_sb_data:
+            st.markdown("---")
+            st.markdown("#### 📊 Sub-Bucket Trend by Station")
+            st.caption("Shows sub-bucket breakdown per station over time. Select which sub-buckets to compare.")
+            # Collect all available sub-buckets across all stations
+            all_sbs = set()
+            for station_name, data in has_data.items():
+                for d in data:
+                    for k in d.keys():
+                        if k not in ["Week", "Total"]:
+                            all_sbs.add(k)
+            all_sbs = sorted(all_sbs)
+            if all_sbs:
+                selected_ms_sbs = st.multiselect("Select sub-buckets:", all_sbs, default=all_sbs[:4], key=f"{kp}ms_sb_sel")
+                if selected_ms_sbs:
+                    # Plot each selected sub-bucket with station as different lines
+                    for sb in selected_ms_sbs:
+                        st.markdown(f"**{sb}:**")
+                        fig_sb, ax_sb = plt.subplots(figsize=(7, 2.5))
+                        for idx, (station_name, data) in enumerate(has_data.items()):
+                            sdf = pd.DataFrame(data)
+                            if sb in sdf.columns:
+                                color = station_colors[idx % len(station_colors)]
+                                ax_sb.plot(sdf["Week"], sdf[sb].fillna(0), marker="o", linewidth=1.5, label=station_name, color=color)
+                        ax_sb.set_xlabel("Week", fontsize=8); ax_sb.set_ylabel("Count", fontsize=8)
+                        ax_sb.set_title(f"{sb[:40]}", fontsize=8); ax_sb.legend(fontsize=7)
+                        ax_sb.tick_params(labelsize=7); plt.xticks(rotation=45); plt.tight_layout()
+                        st.pyplot(fig_sb)
+
     elif any(len(d) == 1 for d in all_station_data.values()):
         st.info("Need at least 2 weeks per station to show a trend.")
     else:
@@ -1096,20 +1146,23 @@ def _render_trend_chart(weeks_data, kp=""):
         if sb_cols:
             st.markdown("---")
             st.markdown("**📊 Sub-Bucket Trend:**")
-            sb_colors = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6", "#1abc9c", "#e67e22", "#34495e"]
-            fig2, ax2 = plt.subplots(figsize=(7, 3.5))
-            for idx, sb in enumerate(sb_cols):
-                c = sb_colors[idx % len(sb_colors)]
-                vals = weekly[sb].fillna(0)
-                ax2.plot(weekly["Week"], vals, marker="o", linewidth=1.5, label=sb[:30], color=c)
-            ax2.set_xlabel("Week", fontsize=8); ax2.set_ylabel("Losses", fontsize=8)
-            ax2.set_title("Sub-Bucket Trend", fontsize=9); ax2.tick_params(labelsize=7)
-            ax2.legend(fontsize=6, loc="upper right", bbox_to_anchor=(1.0, 1.0))
-            plt.xticks(rotation=45); plt.tight_layout()
-            st.pyplot(fig2)
-            # Table
-            sb_table = weekly[["Week"] + sb_cols].copy()
-            st.dataframe(sb_table, width="stretch")
+            # Let user choose which sub-buckets to display
+            selected_sbs = st.multiselect("Select sub-buckets to show:", sb_cols, default=sb_cols[:5], key=f"{kp}sb_select")
+            if selected_sbs:
+                sb_colors = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6", "#1abc9c", "#e67e22", "#34495e"]
+                fig2, ax2 = plt.subplots(figsize=(7, 3.5))
+                for idx, sb in enumerate(selected_sbs):
+                    c = sb_colors[idx % len(sb_colors)]
+                    vals = weekly[sb].fillna(0)
+                    ax2.plot(weekly["Week"], vals, marker="o", linewidth=1.5, label=sb[:30], color=c)
+                ax2.set_xlabel("Week", fontsize=8); ax2.set_ylabel("Losses", fontsize=8)
+                ax2.set_title("Sub-Bucket Trend", fontsize=9); ax2.tick_params(labelsize=7)
+                ax2.legend(fontsize=6, loc="upper right", bbox_to_anchor=(1.0, 1.0))
+                plt.xticks(rotation=45); plt.tight_layout()
+                st.pyplot(fig2)
+                # Table
+                sb_table = weekly[["Week"] + selected_sbs].copy()
+                st.dataframe(sb_table, width="stretch")
 
         st.download_button("⬇️ Download trend data", weekly.to_csv(index=False), "weekly_trend.csv", "text/csv", key=f"{kp}dl_trend")
     elif len(weeks_data) == 1:
